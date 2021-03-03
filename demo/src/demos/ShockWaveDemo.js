@@ -1,21 +1,32 @@
 import {
-	AmbientLight,
-	CubeTextureLoader,
-	DirectionalLight,
+	Color,
 	Mesh,
 	MeshBasicMaterial,
-	OrbitControls,
-	SphereBufferGeometry
+	PerspectiveCamera,
+	SphereBufferGeometry,
+	Vector3
 } from "three";
 
-import { ShockWavePass, RenderPass } from "../../../src";
-import { Demo } from "./Demo.js";
+import { SpatialControls } from "spatial-controls";
+import { ProgressManager } from "../utils/ProgressManager";
+import { PostProcessingDemo } from "./PostProcessingDemo";
+
+import * as Sponza from "./objects/Sponza";
+
+import {
+	EdgeDetectionMode,
+	EffectPass,
+	ShockWaveEffect,
+	SMAAEffect,
+	SMAAImageLoader,
+	SMAAPreset
+} from "../../../src";
 
 /**
  * A shock wave demo setup.
  */
 
-export class ShockWaveDemo extends Demo {
+export class ShockWaveDemo extends PostProcessingDemo {
 
 	/**
 	 * Constructs a new shock wave demo.
@@ -25,64 +36,57 @@ export class ShockWaveDemo extends Demo {
 
 	constructor(composer) {
 
-		super(composer);
+		super("shock-wave", composer);
 
 		/**
-		 * A shock wave pass.
+		 * An effect.
 		 *
-		 * @type {ShockWavePass}
+		 * @type {Effect}
 		 * @private
 		 */
 
-		this.shockWavePass = null;
+		this.effect = null;
 
 	}
 
 	/**
 	 * Loads scene assets.
 	 *
-	 * @param {Function} callback - A callback function.
+	 * @return {Promise} A promise that will be fulfilled as soon as all assets have been loaded.
 	 */
 
-	load(callback) {
+	load() {
 
-		const assets = new Map();
+		const assets = this.assets;
 		const loadingManager = this.loadingManager;
-		const cubeTextureLoader = new CubeTextureLoader(loadingManager);
+		const smaaImageLoader = new SMAAImageLoader(loadingManager);
 
-		const path = "textures/skies/space3/";
-		const format = ".jpg";
-		const urls = [
-			path + "px" + format, path + "nx" + format,
-			path + "py" + format, path + "ny" + format,
-			path + "pz" + format, path + "nz" + format
-		];
+		const anisotropy = Math.min(this.composer.getRenderer().capabilities.getMaxAnisotropy(), 8);
 
-		if(this.assets === null) {
+		return new Promise((resolve, reject) => {
 
-			loadingManager.onProgress = (item, loaded, total) => {
+			if(assets.size === 0) {
 
-				if(loaded === total) {
+				loadingManager.onLoad = () => setTimeout(resolve, 250);
+				loadingManager.onProgress = ProgressManager.updateProgress;
+				loadingManager.onError = (url) => console.error(`Failed to load ${url}`);
 
-					this.assets = assets;
+				Sponza.load(assets, loadingManager, anisotropy);
 
-					callback();
+				smaaImageLoader.load(([search, area]) => {
 
-				}
+					assets.set("smaa-search", search);
+					assets.set("smaa-area", area);
 
-			};
+				});
 
-			cubeTextureLoader.load(urls, function(textureCube) {
+			} else {
 
-				assets.set("sky", textureCube);
+				resolve();
 
-			});
+			}
 
-		} else {
-
-			callback();
-
-		}
+		});
 
 	}
 
@@ -90,114 +94,128 @@ export class ShockWaveDemo extends Demo {
 	 * Creates the scene.
 	 */
 
-	initialise() {
+	initialize() {
 
 		const scene = this.scene;
-		const camera = this.camera;
 		const assets = this.assets;
 		const composer = this.composer;
+		const renderer = composer.getRenderer();
 
-		// Controls.
+		// Camera
 
-		this.controls = new OrbitControls(camera, composer.renderer.domElement);
+		const aspect = window.innerWidth / window.innerHeight;
+		const camera = new PerspectiveCamera(50, aspect, 0.5, 2000);
+		camera.position.set(-8, 1, -0.25);
+		this.camera = camera;
 
-		// Camera.
+		// Controls
 
-		camera.position.set(5, 1, 5);
-		camera.lookAt(this.controls.target);
+		const target = new Vector3(-0.5, 3, -0.25);
+		const controls = new SpatialControls(camera.position, camera.quaternion, renderer.domElement);
+		controls.settings.pointer.lock = false;
+		controls.settings.translation.enabled = true;
+		controls.settings.sensitivity.rotation = 2.2;
+		controls.settings.sensitivity.translation = 3.0;
+		controls.lookAt(target);
+		controls.setOrbitEnabled(false);
+		this.controls = controls;
 
-		// Sky.
+		// Sky
 
-		scene.background = assets.get("sky");
+		scene.background = new Color(0xeeeeee);
 
-		// Lights.
+		// Lights
 
-		const ambientLight = new AmbientLight(0x666666);
-		const directionalLight = new DirectionalLight(0xffbbaa);
+		scene.add(...Sponza.createLights());
 
-		directionalLight.position.set(-1, 1, 1);
-		directionalLight.target.position.copy(scene.position);
+		// Objects
 
-		scene.add(directionalLight);
-		scene.add(ambientLight);
-
-		// Objects.
+		scene.add(assets.get(Sponza.tag));
 
 		const geometry = new SphereBufferGeometry(1, 64, 64);
 		const material = new MeshBasicMaterial({
-			color: 0xffff00,
-			envMap: assets.get("sky")
+			color: 0x000000,
+			transparent: true,
+			opacity: 0.25
 		});
 
 		const mesh = new Mesh(geometry, material);
+		mesh.position.copy(target);
 		scene.add(mesh);
 
-		// Passes.
+		// Passes
 
-		composer.addPass(new RenderPass(scene, camera));
+		const smaaEffect = new SMAAEffect(
+			assets.get("smaa-search"),
+			assets.get("smaa-area"),
+			SMAAPreset.HIGH,
+			EdgeDetectionMode.DEPTH
+		);
 
-		const pass = new ShockWavePass(camera, mesh.position, {
-			speed: 1.0,
+		smaaEffect.edgeDetectionMaterial.setEdgeDetectionThreshold(0.01);
+
+		const shockWaveEffect = new ShockWaveEffect(camera, mesh.position, {
+			speed: 1.25,
 			maxRadius: 0.5,
 			waveSize: 0.2,
 			amplitude: 0.05
 		});
 
-		pass.renderToScreen = true;
-		this.shockWavePass = pass;
-		composer.addPass(pass);
+		const effectPass = new EffectPass(camera, shockWaveEffect);
+		const smaaPass = new EffectPass(camera, smaaEffect);
+
+		this.effect = shockWaveEffect;
+
+		composer.addPass(effectPass);
+		composer.addPass(smaaPass);
 
 	}
 
 	/**
 	 * Registers configuration options.
 	 *
-	 * @param {GUI} gui - A GUI.
+	 * @param {GUI} menu - A menu.
 	 */
 
-	configure(gui) {
+	registerOptions(menu) {
 
-		const pass = this.shockWavePass;
+		const effect = this.effect;
+		const uniforms = effect.uniforms;
 
 		const params = {
-			"speed": pass.speed,
-			"size": pass.shockWaveMaterial.uniforms.size.value,
-			"extent": pass.shockWaveMaterial.uniforms.maxRadius.value,
-			"waveSize": pass.shockWaveMaterial.uniforms.waveSize.value,
-			"amplitude": pass.shockWaveMaterial.uniforms.amplitude.value
+			"size": uniforms.get("size").value,
+			"extent": uniforms.get("maxRadius").value,
+			"waveSize": uniforms.get("waveSize").value,
+			"amplitude": uniforms.get("amplitude").value
 		};
 
-		gui.add(params, "speed").min(0.0).max(10.0).step(0.001).onChange(function() {
+		menu.add(effect, "speed").min(0.0).max(10.0).step(0.001);
 
-			pass.speed = params.speed;
+		menu.add(params, "size").min(0.01).max(2.0).step(0.001).onChange((value) => {
 
-		});
-
-		gui.add(params, "size").min(0.01).max(2.0).step(0.001).onChange(function() {
-
-			pass.shockWaveMaterial.uniforms.size.value = params.size;
+			uniforms.get("size").value = value;
 
 		});
 
-		gui.add(params, "extent").min(0.0).max(10.0).step(0.001).onChange(function() {
+		menu.add(params, "extent").min(0.0).max(10.0).step(0.001).onChange((value) => {
 
-			pass.shockWaveMaterial.uniforms.maxRadius.value = params.extent;
-
-		});
-
-		gui.add(params, "waveSize").min(0.0).max(2.0).step(0.001).onChange(function() {
-
-			pass.shockWaveMaterial.uniforms.waveSize.value = params.waveSize;
+			uniforms.get("maxRadius").value = value;
 
 		});
 
-		gui.add(params, "amplitude").min(0.0).max(0.25).step(0.001).onChange(function() {
+		menu.add(params, "waveSize").min(0.0).max(2.0).step(0.001).onChange((value) => {
 
-			pass.shockWaveMaterial.uniforms.amplitude.value = params.amplitude;
+			uniforms.get("waveSize").value = value;
 
 		});
 
-		gui.add(pass, "explode");
+		menu.add(params, "amplitude").min(0.0).max(0.25).step(0.001).onChange((value) => {
+
+			uniforms.get("amplitude").value = value;
+
+		});
+
+		menu.add(effect, "explode");
 
 	}
 

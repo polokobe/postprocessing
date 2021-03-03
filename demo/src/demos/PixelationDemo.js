@@ -1,41 +1,24 @@
-import {
-	AmbientLight,
-	BoxBufferGeometry,
-	CubeTextureLoader,
-	DirectionalLight,
-	Mesh,
-	MeshPhongMaterial,
-	Object3D,
-	OrbitControls,
-	Scene,
-	SphereBufferGeometry
-} from "three";
+import { Color, PerspectiveCamera, Vector3 } from "three";
+import { SpatialControls } from "spatial-controls";
+import { ProgressManager } from "../utils/ProgressManager";
+import { PostProcessingDemo } from "./PostProcessingDemo";
+
+import * as Sponza from "./objects/Sponza";
 
 import {
-	ClearMaskPass,
-	CopyMaterial,
-	MaskPass,
-	PixelationPass,
-	RenderPass,
-	ShaderPass
+	EdgeDetectionMode,
+	EffectPass,
+	PixelationEffect,
+	SMAAEffect,
+	SMAAImageLoader,
+	SMAAPreset
 } from "../../../src";
-
-import { Demo } from "./Demo.js";
-
-/**
- * PI times two.
- *
- * @type {Number}
- * @private
- */
-
-const TWO_PI = 2.0 * Math.PI;
 
 /**
  * A pixelation demo setup.
  */
 
-export class PixelationDemo extends Demo {
+export class PixelationDemo extends PostProcessingDemo {
 
 	/**
 	 * Constructs a new pixelation demo.
@@ -45,91 +28,57 @@ export class PixelationDemo extends Demo {
 
 	constructor(composer) {
 
-		super(composer);
+		super("pixelation", composer);
 
 		/**
-		 * An object.
+		 * An effect.
 		 *
-		 * @type {Object3D}
+		 * @type {Effect}
 		 * @private
 		 */
 
-		this.object = null;
-
-		/**
-		 * An object used for masking.
-		 *
-		 * @type {Mesh}
-		 * @private
-		 */
-
-		this.maskObject = null;
-
-		/**
-		 * A mask pass.
-		 *
-		 * @type {MaskPass}
-		 * @private
-		 */
-
-		this.maskPass = null;
-
-		/**
-		 * A pixelation pass.
-		 *
-		 * @type {PixelationPass}
-		 * @private
-		 */
-
-		this.pixelationPass = null;
+		this.effect = null;
 
 	}
 
 	/**
 	 * Loads scene assets.
 	 *
-	 * @param {Function} callback - A callback function.
+	 * @return {Promise} A promise that returns a collection of assets.
 	 */
 
-	load(callback) {
+	load() {
 
-		const assets = new Map();
+		const assets = this.assets;
 		const loadingManager = this.loadingManager;
-		const cubeTextureLoader = new CubeTextureLoader(loadingManager);
+		const smaaImageLoader = new SMAAImageLoader(loadingManager);
 
-		const path = "textures/skies/space/";
-		const format = ".jpg";
-		const urls = [
-			path + "px" + format, path + "nx" + format,
-			path + "py" + format, path + "ny" + format,
-			path + "pz" + format, path + "nz" + format
-		];
+		const anisotropy = Math.min(this.composer.getRenderer().capabilities.getMaxAnisotropy(), 8);
 
-		if(this.assets === null) {
+		return new Promise((resolve, reject) => {
 
-			loadingManager.onProgress = (item, loaded, total) => {
+			if(assets.size === 0) {
 
-				if(loaded === total) {
+				loadingManager.onLoad = () => setTimeout(resolve, 250);
+				loadingManager.onProgress = ProgressManager.updateProgress;
+				loadingManager.onError = (url) => console.error(`Failed to load ${url}`);
 
-					this.assets = assets;
+				Sponza.load(assets, loadingManager, anisotropy);
 
-					callback();
+				smaaImageLoader.load(([search, area]) => {
 
-				}
+					assets.set("smaa-search", search);
+					assets.set("smaa-area", area);
 
-			};
+				});
 
-			cubeTextureLoader.load(urls, function(textureCube) {
+			} else {
 
-				assets.set("sky", textureCube);
+				resolve();
 
-			});
+			}
 
-		} else {
-
-			callback();
-
-		}
+		});
 
 	}
 
@@ -137,154 +86,84 @@ export class PixelationDemo extends Demo {
 	 * Creates the scene.
 	 */
 
-	initialise() {
+	initialize() {
 
 		const scene = this.scene;
-		const camera = this.camera;
 		const assets = this.assets;
 		const composer = this.composer;
+		const renderer = composer.getRenderer();
 
-		// Controls.
+		// Camera
 
-		this.controls = new OrbitControls(camera, composer.renderer.domElement);
+		const aspect = window.innerWidth / window.innerHeight;
+		const camera = new PerspectiveCamera(50, aspect, 0.5, 2000);
+		camera.position.set(-9, 0.5, 0);
+		this.camera = camera;
 
-		// Camera.
+		// Controls
 
-		camera.position.set(10, 1, 10);
-		camera.lookAt(this.controls.target);
+		const target = new Vector3(0, 3, -3.5);
+		const controls = new SpatialControls(camera.position, camera.quaternion, renderer.domElement);
+		controls.settings.pointer.lock = false;
+		controls.settings.translation.enabled = true;
+		controls.settings.sensitivity.rotation = 2.2;
+		controls.settings.sensitivity.translation = 3.0;
+		controls.lookAt(target);
+		controls.setOrbitEnabled(false);
+		this.controls = controls;
 
-		// Sky.
+		// Sky
 
-		scene.background = assets.get("sky");
+		scene.background = new Color(0xeeeeee);
 
-		// Lights.
+		// Lights
 
-		const ambientLight = new AmbientLight(0x666666);
-		const directionalLight = new DirectionalLight(0xffbbaa);
+		scene.add(...Sponza.createLights());
 
-		directionalLight.position.set(-1, 1, 1);
-		directionalLight.target.position.copy(scene.position);
+		// Objects
 
-		scene.add(directionalLight);
-		scene.add(ambientLight);
+		scene.add(assets.get(Sponza.tag));
 
-		// Random objects.
+		// Passes
 
-		const object = new Object3D();
-		const geometry = new SphereBufferGeometry(1, 4, 4);
+		const smaaEffect = new SMAAEffect(
+			assets.get("smaa-search"),
+			assets.get("smaa-area"),
+			SMAAPreset.HIGH,
+			EdgeDetectionMode.DEPTH
+		);
 
-		let material, mesh;
-		let i;
+		smaaEffect.edgeDetectionMaterial.setEdgeDetectionThreshold(0.01);
 
-		for(i = 0; i < 100; ++i) {
+		const pixelationEffect = new PixelationEffect(5.0);
 
-			material = new MeshPhongMaterial({
-				color: 0xffffff * Math.random(),
-				flatShading: true
-			});
+		const effectPass = new EffectPass(camera, pixelationEffect);
+		const smaaPass = new EffectPass(camera, smaaEffect);
 
-			mesh = new Mesh(geometry, material);
-			mesh.position.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-			mesh.position.multiplyScalar(Math.random() * 10);
-			mesh.rotation.set(Math.random() * 2, Math.random() * 2, Math.random() * 2);
-			mesh.scale.multiplyScalar(Math.random());
-			object.add(mesh);
+		this.effect = pixelationEffect;
 
-		}
-
-		this.object = object;
-		scene.add(object);
-
-		// Stencil mask scene.
-
-		const maskScene = new Scene();
-
-		mesh = new Mesh(new BoxBufferGeometry(4, 4, 4));
-		this.maskObject = mesh;
-		maskScene.add(mesh);
-
-		// Passes.
-
-		let pass = new RenderPass(scene, camera);
-		composer.addPass(pass);
-
-		pass = new MaskPass(maskScene, camera);
-		this.maskPass = pass;
-		composer.addPass(pass);
-
-		pass = new PixelationPass(5.0);
-		this.pixelationPass = pass;
-		composer.addPass(pass);
-
-		composer.addPass(new ClearMaskPass());
-
-		pass = new ShaderPass(new CopyMaterial());
-		pass.renderToScreen = true;
-		composer.addPass(pass);
-
-	}
-
-	/**
-	 * Updates this demo.
-	 *
-	 * @param {Number} delta - The time since the last frame in seconds.
-	 */
-
-	update(delta) {
-
-		const object = this.object;
-		const maskObject = this.maskObject;
-
-		let time;
-
-		if(object !== null && maskObject !== null) {
-
-			object.rotation.x += 0.001;
-			object.rotation.y += 0.005;
-
-			// Prevent overflow.
-			if(object.rotation.x >= TWO_PI) {
-
-				object.rotation.x -= TWO_PI;
-
-			}
-
-			if(object.rotation.y >= TWO_PI) {
-
-				object.rotation.y -= TWO_PI;
-
-			}
-
-			time = performance.now() * 0.001;
-
-			maskObject.position.x = Math.cos(time / 1.5) * 4;
-			maskObject.position.y = Math.sin(time) * 4;
-			maskObject.rotation.x = time;
-			maskObject.rotation.y = time * 0.5;
-
-		}
+		composer.addPass(smaaPass);
+		composer.addPass(effectPass);
 
 	}
 
 	/**
 	 * Registers configuration options.
 	 *
-	 * @param {GUI} gui - A GUI.
+	 * @param {GUI} menu - A menu.
 	 */
 
-	configure(gui) {
+	registerOptions(menu) {
 
-		const maskPass = this.maskPass;
+		const effect = this.effect;
 
 		const params = {
-			"use mask": maskPass.enabled
+			"granularity": effect.getGranularity()
 		};
 
-		gui.add(this.pixelationPass, "granularity").min(0.0).max(50.0).step(0.1);
+		menu.add(params, "granularity").min(0.0).max(50.0).step(0.1).onChange((value) => {
 
-		gui.add(params, "use mask").onChange(function() {
-
-			maskPass.enabled = params["use mask"];
+			effect.setGranularity(value);
 
 		});
 

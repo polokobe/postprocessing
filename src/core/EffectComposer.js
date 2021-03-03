@@ -4,7 +4,11 @@ import {
 	LinearFilter,
 	RGBAFormat,
 	RGBFormat,
+	UnsignedByteType,
+	UnsignedIntType,
 	UnsignedInt248Type,
+	Vector2,
+	WebGLMultisampleRenderTarget,
 	WebGLRenderTarget
 } from "three";
 
@@ -18,8 +22,10 @@ import { CopyMaterial } from "../materials";
  * unnecessary clear operations.
  *
  * It is common practice to use a {@link RenderPass} as the first pass to
- * automatically clear the screen and render the scene to a texture for further
- * processing.
+ * automatically clear the buffers and render a scene for further processing.
+ *
+ * @implements {Resizable}
+ * @implements {Disposable}
  */
 
 export class EffectComposer {
@@ -27,28 +33,32 @@ export class EffectComposer {
 	/**
 	 * Constructs a new effect composer.
 	 *
-	 * @param {WebGLRenderer} [renderer] - The renderer that should be used.
+	 * @param {WebGLRenderer} renderer - The renderer that should be used.
 	 * @param {Object} [options] - The options.
 	 * @param {Boolean} [options.depthBuffer=true] - Whether the main render targets should have a depth buffer.
 	 * @param {Boolean} [options.stencilBuffer=false] - Whether the main render targets should have a stencil buffer.
-	 * @param {Boolean} [options.depthTexture=false] - Set to true if one of your passes relies on a depth texture.
+	 * @param {Number} [options.multisampling=0] - The number of samples used for multisample antialiasing. Requires WebGL 2.
+	 * @param {Number} [options.frameBufferType] - The type of the internal frame buffers. It's recommended to use HalfFloatType if possible.
 	 */
 
-	constructor(renderer = null, options = {}) {
+	constructor(renderer = null, {
+		depthBuffer = true,
+		stencilBuffer = false,
+		multisampling = 0,
+		frameBufferType
+	} = {}) {
 
 		/**
 		 * The renderer.
 		 *
-		 * You may replace the renderer at any time by using
-		 * {@link EffectComposer#replaceRenderer}.
-		 *
 		 * @type {WebGLRenderer}
+		 * @private
 		 */
 
 		this.renderer = renderer;
 
 		/**
-		 * The read buffer.
+		 * The input buffer.
 		 *
 		 * Reading from and writing to the same render target should be avoided.
 		 * Therefore, two seperate yet identical buffers are used.
@@ -57,28 +67,23 @@ export class EffectComposer {
 		 * @private
 		 */
 
-		this.readBuffer = null;
+		this.inputBuffer = null;
 
 		/**
-		 * The write buffer.
+		 * The output buffer.
 		 *
 		 * @type {WebGLRenderTarget}
 		 * @private
 		 */
 
-		this.writeBuffer = null;
+		this.outputBuffer = null;
 
 		if(this.renderer !== null) {
 
 			this.renderer.autoClear = false;
-
-			this.readBuffer = this.createBuffer(
-				(options.depthBuffer !== undefined) ? options.depthBuffer : true,
-				(options.stencilBuffer !== undefined) ? options.stencilBuffer : false,
-				(options.depthTexture !== undefined) ? options.depthTexture : false
-			);
-
-			this.writeBuffer = this.readBuffer.clone();
+			this.inputBuffer = this.createBuffer(depthBuffer, stencilBuffer, frameBufferType, multisampling);
+			this.outputBuffer = this.inputBuffer.clone();
+			this.enableExtensions();
 
 		}
 
@@ -92,6 +97,15 @@ export class EffectComposer {
 		this.copyPass = new ShaderPass(new CopyMaterial());
 
 		/**
+		 * A depth texture.
+		 *
+		 * @type {DepthTexture}
+		 * @private
+		 */
+
+		this.depthTexture = null;
+
+		/**
 		 * The passes.
 		 *
 		 * @type {Pass[]}
@@ -100,85 +114,217 @@ export class EffectComposer {
 
 		this.passes = [];
 
+		/**
+		 * Determines whether the last pass automatically renders to screen.
+		 *
+		 * @type {Boolean}
+		 */
+
+		this.autoRenderToScreen = true;
+
 	}
 
 	/**
-	 * The depth texture of the read and write buffers.
+	 * The current amount of samples used for multisample antialiasing.
 	 *
-	 * @type {DepthTexture}
-	 * @default null
+	 * @type {Number}
 	 */
 
-	get depthTexture() {
+	get multisampling() {
 
-		return this.readBuffer.depthTexture;
+		return (this.inputBuffer instanceof WebGLMultisampleRenderTarget) ?
+			this.inputBuffer.samples : 0;
 
 	}
 
 	/**
-	 * The read and write buffers share a single depth texture. Depth will be
-	 * written to this texture when something is rendered into one of the buffers
-	 * and the involved materials have depth write enabled.
+	 * Sets the amount of MSAA samples.
 	 *
-	 * You may enable this mechanism during the instantiation of the composer or
-	 * by assigning a DepthTexture instance later on. You may also disable it by
-	 * assigning null.
+	 * Requires WebGL 2. Set to zero to disable multisampling.
 	 *
-	 * @type {DepthTexture}
+	 * @type {Number}
 	 */
 
-	set depthTexture(x) {
+	set multisampling(value) {
 
-		this.readBuffer.depthTexture = x;
-		this.writeBuffer.depthTexture = x;
+		const buffer = this.inputBuffer;
+		const multisampling = this.multisampling;
+
+		if(multisampling > 0 && value > 0) {
+
+			this.inputBuffer.samples = value;
+			this.outputBuffer.samples = value;
+
+		} else if(multisampling !== value) {
+
+			this.inputBuffer.dispose();
+			this.outputBuffer.dispose();
+
+			// Enable or disable MSAA.
+			this.inputBuffer = this.createBuffer(
+				buffer.depthBuffer,
+				buffer.stencilBuffer,
+				buffer.texture.type,
+				value
+			);
+
+			this.inputBuffer.depthTexture = this.depthTexture;
+			this.outputBuffer = this.inputBuffer.clone();
+
+		}
 
 	}
 
 	/**
-	 * Replaces the current renderer with the given one. The DOM element of the
-	 * current renderer will automatically be removed from its parent node and the
-	 * DOM element of the new renderer will take its place.
+	 * Returns the WebGL renderer.
 	 *
-	 * The auto clear mechanism of the provided renderer will be disabled.
+	 * You may replace the renderer at any time by using
+	 * {@link EffectComposer#replaceRenderer}.
 	 *
-	 * Switching between renderers allows you to dynamically enable or disable
-	 * antialiasing.
+	 * @return {WebGLRenderer} The renderer.
+	 */
+
+	getRenderer() {
+
+		return this.renderer;
+
+	}
+
+	/**
+	 * Explicitly enables required WebGL extensions.
+	 *
+	 * @private
+	 */
+
+	enableExtensions() {
+
+		const frameBufferType = this.inputBuffer.texture.type;
+		const capabilities = this.renderer.capabilities;
+		const context = this.renderer.getContext();
+
+		if(frameBufferType !== UnsignedByteType) {
+
+			if(capabilities.isWebGL2) {
+
+				context.getExtension("EXT_color_buffer_float");
+
+			} else {
+
+				context.getExtension("EXT_color_buffer_half_float");
+
+			}
+
+		}
+
+	}
+
+	/**
+	 * Replaces the current renderer with the given one.
+	 *
+	 * The auto clear mechanism of the provided renderer will be disabled. If the
+	 * new render size differs from the previous one, all passes will be updated.
+	 *
+	 * By default, the DOM element of the current renderer will automatically be
+	 * removed from its parent node and the DOM element of the new renderer will
+	 * take its place.
 	 *
 	 * @param {WebGLRenderer} renderer - The new renderer.
+	 * @param {Boolean} updateDOM - Indicates whether the old canvas should be replaced by the new one in the DOM.
 	 * @return {WebGLRenderer} The old renderer.
 	 */
 
-	replaceRenderer(renderer) {
+	replaceRenderer(renderer, updateDOM = true) {
 
 		const oldRenderer = this.renderer;
 
-		let parent, oldSize, newSize;
-
 		if(oldRenderer !== null && oldRenderer !== renderer) {
+
+			const oldSize = oldRenderer.getSize(new Vector2());
+			const newSize = renderer.getSize(new Vector2());
+			const parent = oldRenderer.domElement.parentNode;
 
 			this.renderer = renderer;
 			this.renderer.autoClear = false;
 
-			parent = oldRenderer.domElement.parentNode;
-			oldSize = oldRenderer.getSize();
-			newSize = renderer.getSize();
+			if(!oldSize.equals(newSize)) {
 
-			if(parent !== null) {
+				this.setSize();
+
+			}
+
+			if(updateDOM && parent !== null) {
 
 				parent.removeChild(oldRenderer.domElement);
 				parent.appendChild(renderer.domElement);
 
 			}
 
-			if(oldSize.width !== newSize.width || oldSize.height !== newSize.height) {
-
-				this.setSize();
-
-			}
+			this.enableExtensions();
 
 		}
 
 		return oldRenderer;
+
+	}
+
+	/**
+	 * Creates a depth texture attachment that will be provided to all passes.
+	 *
+	 * Note: When a shader reads from a depth texture and writes to a render
+	 * target that uses the same depth texture attachment, the depth information
+	 * will be lost. This happens even if `depthWrite` is disabled.
+	 *
+	 * @private
+	 * @return {DepthTexture} The depth texture.
+	 */
+
+	createDepthTexture() {
+
+		const depthTexture = this.depthTexture = new DepthTexture();
+
+		// Hack: Make sure the input buffer uses the depth texture.
+		this.inputBuffer.depthTexture = depthTexture;
+		this.inputBuffer.dispose();
+
+		if(this.inputBuffer.stencilBuffer) {
+
+			depthTexture.format = DepthStencilFormat;
+			depthTexture.type = UnsignedInt248Type;
+
+		} else {
+
+			depthTexture.type = UnsignedIntType;
+
+		}
+
+		return depthTexture;
+
+	}
+
+	/**
+	 * Deletes the current depth texture.
+	 *
+	 * @private
+	 */
+
+	deleteDepthTexture() {
+
+		if(this.depthTexture !== null) {
+
+			this.depthTexture.dispose();
+			this.depthTexture = null;
+
+			// Update the input buffer.
+			this.inputBuffer.depthTexture = null;
+			this.inputBuffer.dispose();
+
+			for(const pass of this.passes) {
+
+				pass.setDepthTexture(null);
+
+			}
+
+		}
 
 	}
 
@@ -189,30 +335,37 @@ export class EffectComposer {
 	 * magnification. Its render texture format depends on whether the renderer
 	 * uses the alpha channel. Mipmaps are disabled.
 	 *
+	 * Note: The buffer format will also be set to RGBA if the frame buffer type
+	 * is HalfFloatType because RGB16F buffers are not renderable.
+	 *
 	 * @param {Boolean} depthBuffer - Whether the render target should have a depth buffer.
 	 * @param {Boolean} stencilBuffer - Whether the render target should have a stencil buffer.
-	 * @param {Boolean} depthTexture - Whether the render target should have a depth texture.
+	 * @param {Number} type - The frame buffer type.
+	 * @param {Number} multisampling - The number of samples to use for antialiasing.
 	 * @return {WebGLRenderTarget} A new render target that equals the renderer's canvas.
 	 */
 
-	createBuffer(depthBuffer, stencilBuffer, depthTexture) {
+	createBuffer(depthBuffer, stencilBuffer, type, multisampling) {
 
-		const drawingBufferSize = this.renderer.getDrawingBufferSize();
-		const alpha = this.renderer.context.getContextAttributes().alpha;
+		const size = this.renderer.getDrawingBufferSize(new Vector2());
+		const alpha = this.renderer.getContext().getContextAttributes().alpha;
 
-		const renderTarget = new WebGLRenderTarget(drawingBufferSize.width, drawingBufferSize.height, {
+		const options = {
+			format: (!alpha && type === UnsignedByteType) ? RGBFormat : RGBAFormat,
 			minFilter: LinearFilter,
 			magFilter: LinearFilter,
-			format: alpha ? RGBAFormat : RGBFormat,
-			depthBuffer: depthBuffer,
-			stencilBuffer: stencilBuffer,
-			depthTexture: depthTexture ? new DepthTexture() : null
-		});
+			stencilBuffer,
+			depthBuffer,
+			type
+		};
 
-		if(depthTexture && stencilBuffer) {
+		const renderTarget = (multisampling > 0) ?
+			new WebGLMultisampleRenderTarget(size.width, size.height, options) :
+			new WebGLRenderTarget(size.width, size.height, options);
 
-			renderTarget.depthTexture.format = DepthStencilFormat;
-			renderTarget.depthTexture.type = UnsignedInt248Type;
+		if(multisampling > 0) {
+
+			renderTarget.samples = multisampling;
 
 		}
 
@@ -232,19 +385,65 @@ export class EffectComposer {
 
 	addPass(pass, index) {
 
+		const passes = this.passes;
 		const renderer = this.renderer;
-		const drawingBufferSize = renderer.getDrawingBufferSize();
+
+		const drawingBufferSize = renderer.getDrawingBufferSize(new Vector2());
+		const alpha = renderer.getContext().getContextAttributes().alpha;
+		const frameBufferType = this.inputBuffer.texture.type;
 
 		pass.setSize(drawingBufferSize.width, drawingBufferSize.height);
-		pass.initialise(renderer, renderer.context.getContextAttributes().alpha);
+		pass.initialize(renderer, alpha, frameBufferType);
+
+		if(this.autoRenderToScreen) {
+
+			if(passes.length > 0) {
+
+				passes[passes.length - 1].renderToScreen = false;
+
+			}
+
+			if(pass.renderToScreen) {
+
+				this.autoRenderToScreen = false;
+
+			}
+
+		}
 
 		if(index !== undefined) {
 
-			this.passes.splice(index, 0, pass);
+			passes.splice(index, 0, pass);
 
 		} else {
 
-			this.passes.push(pass);
+			passes.push(pass);
+
+		}
+
+		if(this.autoRenderToScreen) {
+
+			passes[passes.length - 1].renderToScreen = true;
+
+		}
+
+		if(pass.needsDepthTexture || this.depthTexture !== null) {
+
+			if(this.depthTexture === null) {
+
+				const depthTexture = this.createDepthTexture();
+
+				for(pass of passes) {
+
+					pass.setDepthTexture(depthTexture);
+
+				}
+
+			} else {
+
+				pass.setDepthTexture(this.depthTexture);
+
+			}
 
 		}
 
@@ -258,61 +457,129 @@ export class EffectComposer {
 
 	removePass(pass) {
 
-		this.passes.splice(this.passes.indexOf(pass), 1);
+		const passes = this.passes;
+		const index = passes.indexOf(pass);
+		const exists = (index !== -1);
+		const removed = exists && (passes.splice(index, 1).length > 0);
+
+		if(removed) {
+
+			if(this.depthTexture !== null) {
+
+				// Check if the depth texture is still required.
+				const reducer = (a, b) => (a || b.needsDepthTexture);
+				const depthTextureRequired = passes.reduce(reducer, false);
+
+				if(!depthTextureRequired) {
+
+					if(pass.getDepthTexture() === this.depthTexture) {
+
+						pass.setDepthTexture(null);
+
+					}
+
+					this.deleteDepthTexture();
+
+				}
+
+			}
+
+			if(this.autoRenderToScreen) {
+
+				// Check if the removed pass was the last one.
+				if(index === passes.length) {
+
+					pass.renderToScreen = false;
+
+					if(passes.length > 0) {
+
+						passes[passes.length - 1].renderToScreen = true;
+
+					}
+
+				}
+
+			}
+
+		}
+
+	}
+
+	/**
+	 * Removes all passes without deleting them.
+	 */
+
+	removeAllPasses() {
+
+		const passes = this.passes;
+
+		this.deleteDepthTexture();
+
+		if(passes.length > 0) {
+
+			if(this.autoRenderToScreen) {
+
+				passes[passes.length - 1].renderToScreen = false;
+
+			}
+
+			this.passes = [];
+
+		}
 
 	}
 
 	/**
 	 * Renders all enabled passes in the order in which they were added.
 	 *
-	 * @param {Number} delta - The time between the last frame and the current one in seconds.
+	 * @param {Number} deltaTime - The time since the last frame in seconds.
 	 */
 
-	render(delta) {
+	render(deltaTime) {
 
-		const passes = this.passes;
 		const renderer = this.renderer;
 		const copyPass = this.copyPass;
 
-		let readBuffer = this.readBuffer;
-		let writeBuffer = this.writeBuffer;
+		let inputBuffer = this.inputBuffer;
+		let outputBuffer = this.outputBuffer;
 
-		let maskActive = false;
-		let pass, context, buffer;
-		let i, l;
+		let stencilTest = false;
+		let context, stencil, buffer;
 
-		for(i = 0, l = passes.length; i < l; ++i) {
-
-			pass = passes[i];
+		for(const pass of this.passes) {
 
 			if(pass.enabled) {
 
-				pass.render(renderer, readBuffer, writeBuffer, delta, maskActive);
+				pass.render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest);
 
 				if(pass.needsSwap) {
 
-					if(maskActive) {
+					if(stencilTest) {
 
-						context = renderer.context;
-						context.stencilFunc(context.NOTEQUAL, 1, 0xffffffff);
-						copyPass.render(renderer, readBuffer, writeBuffer);
-						context.stencilFunc(context.EQUAL, 1, 0xffffffff);
+						copyPass.renderToScreen = pass.renderToScreen;
+						context = renderer.getContext();
+						stencil = renderer.state.buffers.stencil;
+
+						// Preserve the unaffected pixels.
+						stencil.setFunc(context.NOTEQUAL, 1, 0xffffffff);
+						copyPass.render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest);
+						stencil.setFunc(context.EQUAL, 1, 0xffffffff);
 
 					}
 
-					buffer = readBuffer;
-					readBuffer = writeBuffer;
-					writeBuffer = buffer;
+					buffer = inputBuffer;
+					inputBuffer = outputBuffer;
+					outputBuffer = buffer;
 
 				}
 
 				if(pass instanceof MaskPass) {
 
-					maskActive = true;
+					stencilTest = true;
 
 				} else if(pass instanceof ClearMaskPass) {
 
-					maskActive = false;
+					stencilTest = false;
 
 				}
 
@@ -333,36 +600,34 @@ export class EffectComposer {
 	 *
 	 * @param {Number} [width] - The width.
 	 * @param {Number} [height] - The height.
+	 * @param {Boolean} [updateStyle] - Determines whether the style of the canvas should be updated.
 	 */
 
-	setSize(width, height) {
+	setSize(width, height, updateStyle) {
 
-		const passes = this.passes;
 		const renderer = this.renderer;
-
-		let size, drawingBufferSize;
-		let i, l;
 
 		if(width === undefined || height === undefined) {
 
-			size = renderer.getSize();
-			width = size.width;
-			height = size.height;
+			const size = renderer.getSize(new Vector2());
+			width = size.width; height = size.height;
+
+		} else {
+
+			// Update the logical render size.
+			renderer.setSize(width, height, updateStyle);
 
 		}
 
-		// Update the logical render size.
-		renderer.setSize(width, height);
-
 		// The drawing buffer size takes the device pixel ratio into account.
-		drawingBufferSize = renderer.getDrawingBufferSize();
+		const drawingBufferSize = renderer.getDrawingBufferSize(new Vector2());
 
-		this.readBuffer.setSize(drawingBufferSize.width, drawingBufferSize.height);
-		this.writeBuffer.setSize(drawingBufferSize.width, drawingBufferSize.height);
+		this.inputBuffer.setSize(drawingBufferSize.width, drawingBufferSize.height);
+		this.outputBuffer.setSize(drawingBufferSize.width, drawingBufferSize.height);
 
-		for(i = 0, l = passes.length; i < l; ++i) {
+		for(const pass of this.passes) {
 
-			passes[i].setSize(drawingBufferSize.width, drawingBufferSize.height);
+			pass.setSize(drawingBufferSize.width, drawingBufferSize.height);
 
 		}
 
@@ -370,63 +635,43 @@ export class EffectComposer {
 
 	/**
 	 * Resets this composer by deleting all passes and creating new buffers.
-	 *
-	 * @param {WebGLRenderTarget} [renderTarget] - A new render target. If none is provided, the settings of the renderer will be used.
 	 */
 
-	reset(renderTarget) {
+	reset() {
 
-		const depthBuffer = this.readBuffer.depthBuffer;
-		const stencilBuffer = this.readBuffer.stencilBuffer;
-		const depthTexture = (this.readBuffer.depthTexture !== null);
-
-		this.dispose((renderTarget === undefined) ?
-			this.createBuffer(depthBuffer, stencilBuffer, depthTexture) :
-			renderTarget
-		);
+		this.dispose();
+		this.autoRenderToScreen = true;
 
 	}
 
 	/**
-	 * Destroys all passes and render targets.
-	 *
-	 * This method deallocates all render targets, textures and materials created
-	 * by the passes. It also deletes this composer's frame buffers.
-	 *
-	 * @param {WebGLRenderTarget} [renderTarget] - A new render target. If none is provided, the composer will become inoperative.
+	 * Disposes this composer and all passes.
 	 */
 
-	dispose(renderTarget) {
+	dispose() {
 
-		const passes = this.passes;
+		for(const pass of this.passes) {
 
-		if(this.readBuffer !== null && this.writeBuffer !== null) {
-
-			this.readBuffer.dispose();
-			this.writeBuffer.dispose();
-
-			this.readBuffer = null;
-			this.writeBuffer = null;
+			pass.dispose();
 
 		}
 
-		while(passes.length > 0) {
+		this.passes = [];
 
-			passes.pop().dispose();
+		if(this.inputBuffer !== null) {
+
+			this.inputBuffer.dispose();
+
+		}
+
+		if(this.outputBuffer !== null) {
+
+			this.outputBuffer.dispose();
 
 		}
 
-		if(renderTarget !== undefined) {
-
-			// Reanimate.
-			this.readBuffer = renderTarget;
-			this.writeBuffer = this.readBuffer.clone();
-
-		} else {
-
-			this.copyPass.dispose();
-
-		}
+		this.deleteDepthTexture();
+		this.copyPass.dispose();
 
 	}
 

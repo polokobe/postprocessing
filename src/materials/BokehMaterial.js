@@ -1,13 +1,16 @@
-import { ShaderMaterial, Uniform } from "three";
+import { NoBlending, ShaderMaterial, Uniform, Vector2, Vector4 } from "three";
 
-import fragment from "./glsl/bokeh/shader.frag";
-import vertex from "./glsl/bokeh/shader.vert";
+import fragmentShader from "./glsl/bokeh/shader.frag";
+import vertexShader from "./glsl/common/shader.vert";
 
 /**
- * Depth of Field shader (Bokeh).
+ * A bokeh blur material.
  *
- * Original shader code by Martins Upitis:
- *  http://artmartinsh.blogspot.com/2010/02/glsl-lens-blur-filter-with-bokeh.html
+ * This material should be applied twice in a row, with `fill` mode enabled for
+ * the second pass.
+ *
+ * Enabling the `foreground` option causes the shader to combine the near and
+ * far CoC values around foreground objects.
  */
 
 export class BokehMaterial extends ShaderMaterial {
@@ -15,70 +18,122 @@ export class BokehMaterial extends ShaderMaterial {
 	/**
 	 * Constructs a new bokeh material.
 	 *
-	 * @param {PerspectiveCamera} [camera] - A camera.
-	 * @param {Object} [options] - The options.
-	 * @param {Number} [options.focus=1.0] - The focus distance, corresponds directly with the scene depth.
-	 * @param {Number} [options.dof=0.02] - Depth of field. An area in front of and behind the focus point that still appears sharp.
-	 * @param {Number} [options.aperture=0.025] - Camera aperture scale. Bigger values for stronger blur and shallower depth of field.
-	 * @param {Number} [options.maxBlur=1.0] - Maximum blur strength.
+	 * @param {Boolean} [fill=false] - Enables or disables the bokeh highlight fill mode.
+	 * @param {Boolean} [foreground=false] - Determines whether this material will be applied to foreground colors.
 	 */
 
-	constructor(camera = null, options = {}) {
-
-		const settings = Object.assign({
-			focus: 1.0,
-			dof: 0.02,
-			aperture: 0.025,
-			maxBlur: 1.0
-		}, options);
+	constructor(fill = false, foreground = false) {
 
 		super({
 
 			type: "BokehMaterial",
 
-			uniforms: {
-
-				cameraNear: new Uniform(0.1),
-				cameraFar: new Uniform(2000),
-				aspect: new Uniform(1.0),
-
-				tDiffuse: new Uniform(null),
-				tDepth: new Uniform(null),
-
-				focus: new Uniform(settings.focus),
-				dof: new Uniform(settings.dof),
-				aperture: new Uniform(settings.aperture),
-				maxBlur: new Uniform(settings.maxBlur)
-
+			defines: {
+				PASS: fill ? "2" : "1"
 			},
 
-			fragmentShader: fragment,
-			vertexShader: vertex,
+			uniforms: {
+				kernel64: new Uniform(null),
+				kernel16: new Uniform(null),
+				inputBuffer: new Uniform(null),
+				cocBuffer: new Uniform(null),
+				texelSize: new Uniform(new Vector2()),
+				scale: new Uniform(1.0)
+			},
 
+			fragmentShader,
+			vertexShader,
+
+			blending: NoBlending,
 			depthWrite: false,
 			depthTest: false
 
 		});
 
-		this.adoptCameraSettings(camera);
+		/** @ignore */
+		this.toneMapped = false;
+
+		if(foreground) {
+
+			this.defines.FOREGROUND = "1";
+
+		}
+
+		this.generateKernel();
 
 	}
 
 	/**
-	 * Adopts the settings of the given camera.
+	 * Generates the blur kernels.
 	 *
-	 * @param {PerspectiveCamera} camera - A camera.
+	 * @private
 	 */
 
-	adoptCameraSettings(camera) {
+	generateKernel() {
 
-		if(camera !== null) {
+		const GOLDEN_ANGLE = 2.39996323;
+		const points64 = new Float32Array(128);
+		const points16 = new Float32Array(32);
 
-			this.uniforms.cameraNear.value = camera.near;
-			this.uniforms.cameraFar.value = camera.far;
-			this.uniforms.aspect.value = camera.aspect;
+		let i64 = 0, i16 = 0;
+
+		for(let i = 0; i < 80; ++i) {
+
+			const theta = i * GOLDEN_ANGLE;
+			const r = Math.sqrt(i) / Math.sqrt(80);
+			const u = r * Math.cos(theta), v = r * Math.sin(theta);
+
+			if(i % 5 === 0) {
+
+				points16[i16++] = u;
+				points16[i16++] = v;
+
+			} else {
+
+				points64[i64++] = u;
+				points64[i64++] = v;
+
+			}
 
 		}
+
+		// Pack points into vec4 instances to reduce the uniform count.
+		const kernel64 = [];
+		const kernel16 = [];
+
+		for(let i = 0; i < 128;) {
+
+			kernel64.push(new Vector4(
+				points64[i++], points64[i++],
+				points64[i++], points64[i++]
+			));
+
+		}
+
+		for(let i = 0; i < 32;) {
+
+			kernel16.push(new Vector4(
+				points16[i++], points16[i++],
+				points16[i++], points16[i++]
+			));
+
+		}
+
+		this.uniforms.kernel64.value = kernel64;
+		this.uniforms.kernel16.value = kernel16;
+
+	}
+
+	/**
+	 * Sets the texel size.
+	 *
+	 * @param {Number} x - The texel width.
+	 * @param {Number} y - The texel height.
+	 */
+
+	setTexelSize(x, y) {
+
+		this.uniforms.texelSize.value.set(x, y);
 
 	}
 

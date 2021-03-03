@@ -1,19 +1,8 @@
-"use strict";
+import test from "ava";
+import { GodRaysMaterial } from "../../";
 
-const GodRaysMaterial = require("../../build/postprocessing").GodRaysMaterial;
+test("can be created", t => {
 
-module.exports = {
+	t.truthy(new GodRaysMaterial());
 
-	"GodRays": {
-
-		"can be created": function(test) {
-
-			const material = new GodRaysMaterial();
-			test.ok(material);
-			test.done();
-
-		}
-
-	}
-
-};
+});

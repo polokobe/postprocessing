@@ -1,84 +1,104 @@
 {
 	"name": "postprocessing",
-	"version": "3.1.0",
-	"description": "A post processing library that provides the means to implement 2D filter effects for three.js.",
+	"version": "6.20.3",
+	"description": "A post processing library that provides the means to implement image filter effects for three.js.",
 	"homepage": "https://github.com/vanruesc/postprocessing",
 	"main": "build/postprocessing.js",
-	"module": "src/index.js",
+	"module": "build/postprocessing.esm.js",
+	"exports": {
+		"import": "./build/postprocessing.esm.js",
+		"require": "./build/postprocessing.js"
+	},
+	"sideEffects": false,
 	"license": "Zlib",
-
 	"keywords": [
-		"2d",
-		"3d",
 		"rendering",
+		"image",
 		"filter",
 		"effect",
 		"composer",
+		"pass",
+		"post",
+		"processing",
+		"gpgpu",
+		"rtt",
 		"rendertexture",
 		"rendertarget",
-		"effectcomposer"
+		"three"
 	],
-
 	"author": {
 		"name": "Raoul van Rüschen",
 		"email": "vanruesc@outlook.de"
 	},
-
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/vanruesc/postprocessing.git"
 	},
-
 	"bugs": {
 		"url": "https://github.com/vanruesc/postprocessing/issues"
 	},
-
 	"files": [
-		"src",
 		"build"
 	],
-
 	"scripts": {
-		"test": "grunt --production",
-		"prepack": "grunt prepublish",
-		"postpublish": "grunt postpublish"
+		"ava": "ava",
+		"build": "run-s build:*",
+		"build:js": "cross-env NODE_ENV=production ts-node-script esbuild",
+		"clean": "del-cli build public tmp",
+		"copy": "cpy --cwd=demo/static --parents \"**/*\" \"../../public/demo\"",
+		"deploy": "run-s copy lint build doc",
+		"dev": "run-s clean copy && run-p start watch",
+		"doc": "esdoc",
+		"lint": "eslint --ext .js --fix src demo/src",
+		"prepublishOnly": "run-s clean test doc",
+		"test": "run-s lint build ava",
+		"start": "hs -s",
+		"watch": "run-p watch:*",
+		"watch:eslint": "esw -w --ext .js --color src demo/src",
+		"watch:js": "ts-node-script esbuild -w"
 	},
-
-	"engines": {
-		"node": ">=4.0.0",
-		"npm": ">=5.0.0"
+	"ava": {
+		"failFast": true,
+		"files": [
+			"test/**/*.js"
+		],
+		"require": [
+			"esm"
+		]
 	},
-
 	"eslintConfig": {
-		"extends": "delta"
+		"root": true,
+		"extends": "aether"
 	},
-
-	"dependencies": {
-		"three": "0.88.x"
+	"peerDependencies": {
+		"three": ">= 0.102.0 < 0.126.0"
 	},
-
 	"devDependencies": {
-		"@vanruesc/grunt-esdoc": "0.x.x",
-		"dat.gui": "0.6.x",
-		"babel-core": "6.x.x",
-		"babel-preset-es2015-rollup": "3.x.x",
+		"@types/node": "14.x.x",
+		"@types/yargs": "16.x.x",
+		"ava": "3.x.x",
+		"chokidar": "3.x.x",
+		"cpy-cli": "3.x.x",
+		"cross-env": "7.x.x",
+		"dat.gui": "0.x.x",
+		"del-cli": "3.x.x",
+		"esbuild": "0.x.x",
+		"esbuild-plugin-glsl": "1.x.x",
+		"esdoc": "1.x.x",
+		"esdoc-importpath-plugin": "1.x.x",
 		"esdoc-standard-plugin": "1.x.x",
-		"eslint-config-delta": "0.x.x",
-		"grunt": "1.x.x",
-		"grunt-cli": "1.x.x",
-		"grunt-contrib-clean": "1.x.x",
-		"grunt-contrib-copy": "1.x.x",
-		"grunt-contrib-nodeunit": "1.x.x",
-		"grunt-contrib-uglify": "3.x.x",
-		"grunt-eslint": "20.x.x",
-		"grunt-inline-import": "0.x.x",
-		"grunt-rollup": "8.x.x",
-		"jit-grunt": "0.x.x",
-		"load-grunt-config": "0.x.x",
-		"rollup-plugin-babel": "3.x.x",
-		"rollup-plugin-node-resolve": "3.x.x",
-		"rollup-plugin-string": "2.x.x",
-		"stats.js": "0.17.x",
-		"time-grunt": "1.x.x"
+		"eslint": "7.x.x",
+		"eslint-config-aether": "1.x.x",
+		"eslint-watch": "7.x.x",
+		"esm": "3.x.x",
+		"http-server": "0.x.x",
+		"npm-run-all": "4.x.x",
+		"spatial-controls": "3.x.x",
+		"three": "0.x.x",
+		"three-demo": "4.x.x",
+		"ts-node": "9.x.x",
+		"tslib": "2.x.x",
+		"typescript": "4.x.x",
+		"yargs": "16.x.x"
 	}
 }

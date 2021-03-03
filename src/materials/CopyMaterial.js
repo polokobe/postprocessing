@@ -1,7 +1,7 @@
-import { ShaderMaterial, Uniform } from "three";
+import { NoBlending, ShaderMaterial, Uniform } from "three";
 
-import fragment from "./glsl/copy/shader.frag";
-import vertex from "./glsl/copy/shader.vert";
+import fragmentShader from "./glsl/copy/shader.frag";
+import vertexShader from "./glsl/common/shader.vert";
 
 /**
  * A simple copy shader material.
@@ -20,19 +20,21 @@ export class CopyMaterial extends ShaderMaterial {
 			type: "CopyMaterial",
 
 			uniforms: {
-
-				tDiffuse: new Uniform(null),
+				inputBuffer: new Uniform(null),
 				opacity: new Uniform(1.0)
-
 			},
 
-			fragmentShader: fragment,
-			vertexShader: vertex,
+			fragmentShader,
+			vertexShader,
 
+			blending: NoBlending,
 			depthWrite: false,
 			depthTest: false
 
 		});
+
+		/** @ignore */
+		this.toneMapped = false;
 
 	}
 

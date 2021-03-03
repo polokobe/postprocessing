@@ -1,7 +1,11 @@
-import { Pass } from "./Pass.js";
+import { ClearPass } from "./ClearPass";
+import { Pass } from "./Pass";
 
 /**
- * A mask pass.
+ * A stencil mask pass.
+ *
+ * This pass requires that the input and output buffers have a stencil buffer.
+ * You can enable the stencil buffer via the {@link EffectComposer} constructor.
  */
 
 export class MaskPass extends Pass {
@@ -15,89 +19,130 @@ export class MaskPass extends Pass {
 
 	constructor(scene, camera) {
 
-		super(scene, camera, null);
+		super("MaskPass", scene, camera);
+
+		this.needsSwap = false;
 
 		/**
-		 * The name of this pass.
+		 * A clear pass.
+		 *
+		 * @type {ClearPass}
+		 * @private
 		 */
 
-		this.name = "MaskPass";
+		this.clearPass = new ClearPass(false, false, true);
 
 		/**
 		 * Inverse flag.
 		 *
 		 * @type {Boolean}
-		 * @default false
 		 */
 
 		this.inverse = false;
 
-		/**
-		 * Stencil buffer clear flag.
-		 *
-		 * @type {Boolean}
-		 * @default true
-		 */
+	}
 
-		this.clearStencil = true;
+	/**
+	 * Indicates whether this pass should clear the stencil buffer.
+	 *
+	 * @type {Boolean}
+	 */
+
+	get clear() {
+
+		return this.clearPass.enabled;
 
 	}
 
 	/**
-	 * Creates a stencil bit mask.
+	 * Enables or disables auto clear.
 	 *
-	 * @param {WebGLRenderer} renderer - The renderer.
-	 * @param {WebGLRenderTarget} readBuffer - The read buffer.
-	 * @param {WebGLRenderTarget} writeBuffer - The write buffer.
+	 * @type {Boolean}
 	 */
 
-	render(renderer, readBuffer, writeBuffer) {
+	set clear(value) {
 
-		const context = renderer.context;
-		const state = renderer.state;
+		this.clearPass.enabled = value;
+
+	}
+
+	/**
+	 * Renders the effect.
+	 *
+	 * @param {WebGLRenderer} renderer - The renderer.
+	 * @param {WebGLRenderTarget} inputBuffer - A frame buffer that contains the result of the previous pass.
+	 * @param {WebGLRenderTarget} outputBuffer - A frame buffer that serves as the output render target unless this pass renders to screen.
+	 * @param {Number} [deltaTime] - The time between the last frame and the current one in seconds.
+	 * @param {Boolean} [stencilTest] - Indicates whether a stencil mask is active.
+	 */
+
+	render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
+
+		const context = renderer.getContext();
+		const buffers = renderer.state.buffers;
 
 		const scene = this.scene;
 		const camera = this.camera;
+		const clearPass = this.clearPass;
 
 		const writeValue = this.inverse ? 0 : 1;
 		const clearValue = 1 - writeValue;
 
 		// Don't update color or depth.
-		state.buffers.color.setMask(false);
-		state.buffers.depth.setMask(false);
+		buffers.color.setMask(false);
+		buffers.depth.setMask(false);
 
 		// Lock the buffers.
-		state.buffers.color.setLocked(true);
-		state.buffers.depth.setLocked(true);
+		buffers.color.setLocked(true);
+		buffers.depth.setLocked(true);
 
 		// Configure the stencil.
-		state.buffers.stencil.setTest(true);
-		state.buffers.stencil.setOp(context.REPLACE, context.REPLACE, context.REPLACE);
-		state.buffers.stencil.setFunc(context.ALWAYS, writeValue, 0xffffffff);
-		state.buffers.stencil.setClear(clearValue);
+		buffers.stencil.setTest(true);
+		buffers.stencil.setOp(context.REPLACE, context.REPLACE, context.REPLACE);
+		buffers.stencil.setFunc(context.ALWAYS, writeValue, 0xffffffff);
+		buffers.stencil.setClear(clearValue);
+		buffers.stencil.setLocked(true);
 
 		// Clear the stencil.
-		if(this.clearStencil) {
+		if(this.clear) {
 
-			renderer.setRenderTarget(readBuffer);
-			renderer.clearStencil();
+			if(this.renderToScreen) {
 
-			renderer.setRenderTarget(writeBuffer);
-			renderer.clearStencil();
+				clearPass.render(renderer, null);
+
+			} else {
+
+				clearPass.render(renderer, inputBuffer);
+				clearPass.render(renderer, outputBuffer);
+
+			}
 
 		}
 
-		// Draw the mask into both buffers.
-		renderer.render(scene, camera, readBuffer);
-		renderer.render(scene, camera, writeBuffer);
+		// Draw the mask.
+		if(this.renderToScreen) {
+
+			renderer.setRenderTarget(null);
+			renderer.render(scene, camera);
+
+		} else {
+
+			renderer.setRenderTarget(inputBuffer);
+			renderer.render(scene, camera);
+			renderer.setRenderTarget(outputBuffer);
+			renderer.render(scene, camera);
+
+		}
 
 		// Unlock the buffers.
-		state.buffers.color.setLocked(false);
-		state.buffers.depth.setLocked(false);
+		buffers.color.setLocked(false);
+		buffers.depth.setLocked(false);
 
 		// Only render where the stencil is set to 1.
-		state.buffers.stencil.setFunc(context.EQUAL, 1, 0xffffffff);
-		state.buffers.stencil.setOp(context.KEEP, context.KEEP, context.KEEP);
+		buffers.stencil.setLocked(false);
+		buffers.stencil.setFunc(context.EQUAL, 1, 0xffffffff);
+		buffers.stencil.setOp(context.KEEP, context.KEEP, context.KEEP);
+		buffers.stencil.setLocked(true);
 
 	}
 

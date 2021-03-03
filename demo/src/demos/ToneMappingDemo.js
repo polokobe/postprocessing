@@ -1,32 +1,26 @@
+import { Color, PerspectiveCamera, Vector3 } from "three";
+import { SpatialControls } from "spatial-controls";
+import { ProgressManager } from "../utils/ProgressManager";
+import { PostProcessingDemo } from "./PostProcessingDemo";
+
+import * as Sponza from "./objects/Sponza";
+
 import {
-	AmbientLight,
-	BoxBufferGeometry,
-	CubeTextureLoader,
-	DirectionalLight,
-	Mesh,
-	MeshPhongMaterial,
-	OrbitControls,
-	RepeatWrapping,
-	TextureLoader
-} from "three";
-
-import { RenderPass, ToneMappingPass } from "../../../src";
-import { Demo } from "./Demo.js";
-
-/**
- * PI times two.
- *
- * @type {Number}
- * @private
- */
-
-const TWO_PI = 2.0 * Math.PI;
+	BlendFunction,
+	EdgeDetectionMode,
+	EffectPass,
+	SMAAEffect,
+	SMAAImageLoader,
+	SMAAPreset,
+	ToneMappingEffect,
+	ToneMappingMode
+} from "../../../src";
 
 /**
  * A tone mapping demo setup.
  */
 
-export class ToneMappingDemo extends Demo {
+export class ToneMappingDemo extends PostProcessingDemo {
 
 	/**
 	 * Constructs a new tone mapping demo.
@@ -36,81 +30,66 @@ export class ToneMappingDemo extends Demo {
 
 	constructor(composer) {
 
-		super(composer);
+		super("tone-mapping", composer);
 
 		/**
-		 * A dot screen pass.
+		 * An effect.
 		 *
-		 * @type {DotScreenPass}
+		 * @type {Effect}
 		 * @private
 		 */
 
-		this.toneMappingPass = null;
+		this.effect = null;
 
 		/**
-		 * An object.
+		 * A pass.
 		 *
-		 * @type {Object3D}
+		 * @type {Pass}
 		 * @private
 		 */
 
-		this.object = null;
+		this.pass = null;
 
 	}
 
 	/**
 	 * Loads scene assets.
 	 *
-	 * @param {Function} callback - A callback function.
+	 * @return {Promise} A promise that returns a collection of assets.
 	 */
 
-	load(callback) {
+	load() {
 
-		const assets = new Map();
+		const assets = this.assets;
 		const loadingManager = this.loadingManager;
-		const textureLoader = new TextureLoader(loadingManager);
-		const cubeTextureLoader = new CubeTextureLoader(loadingManager);
+		const smaaImageLoader = new SMAAImageLoader(loadingManager);
 
-		const path = "textures/skies/sunset/";
-		const format = ".png";
-		const urls = [
-			path + "px" + format, path + "nx" + format,
-			path + "py" + format, path + "ny" + format,
-			path + "pz" + format, path + "nz" + format
-		];
+		const anisotropy = Math.min(this.composer.getRenderer().capabilities.getMaxAnisotropy(), 8);
 
-		if(this.assets === null) {
+		return new Promise((resolve, reject) => {
 
-			loadingManager.onProgress = (item, loaded, total) => {
+			if(assets.size === 0) {
 
-				if(loaded === total) {
+				loadingManager.onLoad = () => setTimeout(resolve, 250);
+				loadingManager.onProgress = ProgressManager.updateProgress;
+				loadingManager.onError = (url) => console.error(`Failed to load ${url}`);
 
-					this.assets = assets;
+				Sponza.load(assets, loadingManager, anisotropy);
 
-					callback();
+				smaaImageLoader.load(([search, area]) => {
 
-				}
+					assets.set("smaa-search", search);
+					assets.set("smaa-area", area);
 
-			};
+				});
 
-			cubeTextureLoader.load(urls, function(textureCube) {
+			} else {
 
-				assets.set("sky", textureCube);
+				resolve();
 
-			});
+			}
 
-			textureLoader.load("textures/crate.jpg", function(texture) {
-
-				texture.wrapS = texture.wrapT = RepeatWrapping;
-				assets.set("crate-color", texture);
-
-			});
-
-		} else {
-
-			callback();
-
-		}
+		});
 
 	}
 
@@ -118,169 +97,164 @@ export class ToneMappingDemo extends Demo {
 	 * Creates the scene.
 	 */
 
-	initialise() {
+	initialize() {
 
 		const scene = this.scene;
-		const camera = this.camera;
 		const assets = this.assets;
 		const composer = this.composer;
+		const renderer = composer.getRenderer();
 
-		// Controls.
+		// Camera
 
-		this.controls = new OrbitControls(camera, composer.renderer.domElement);
+		const aspect = window.innerWidth / window.innerHeight;
+		const camera = new PerspectiveCamera(50, aspect, 0.5, 2000);
+		camera.position.set(-5.15, 8.1, -0.95);
+		this.camera = camera;
 
-		// Camera.
+		// Controls
 
-		camera.position.set(-3, 0, -3);
-		camera.lookAt(this.controls.target);
+		const target = new Vector3(-4.4, 8.6, -0.5);
+		const controls = new SpatialControls(camera.position, camera.quaternion, renderer.domElement);
+		controls.settings.pointer.lock = false;
+		controls.settings.translation.enabled = true;
+		controls.settings.sensitivity.rotation = 2.2;
+		controls.settings.sensitivity.translation = 3.0;
+		controls.lookAt(target);
+		controls.setOrbitEnabled(false);
+		this.controls = controls;
 
-		// Sky.
+		// Sky
 
-		scene.background = assets.get("sky");
+		scene.background = new Color(0xeeeeee);
 
-		// Lights.
+		// Lights
 
-		const ambientLight = new AmbientLight(0x666666);
-		const directionalLight = new DirectionalLight(0xffbbaa);
+		scene.add(...Sponza.createLights());
 
-		directionalLight.position.set(1440, 200, 2000);
-		directionalLight.target.position.copy(scene.position);
+		// Objects
 
-		scene.add(directionalLight);
-		scene.add(ambientLight);
+		scene.add(assets.get(Sponza.tag));
 
-		// Objects.
+		// Passes
 
-		const mesh = new Mesh(
-			new BoxBufferGeometry(1, 1, 1),
-			new MeshPhongMaterial({
-				map: assets.get("crate-color")
-			})
+		const smaaEffect = new SMAAEffect(
+			assets.get("smaa-search"),
+			assets.get("smaa-area"),
+			SMAAPreset.HIGH,
+			EdgeDetectionMode.DEPTH
 		);
 
-		this.object = mesh;
-		scene.add(mesh);
+		smaaEffect.edgeDetectionMaterial.setEdgeDetectionThreshold(0.01);
 
-		// Passes.
-
-		composer.addPass(new RenderPass(scene, camera));
-
-		const pass = new ToneMappingPass({
-			adaptive: true,
+		const toneMappingEffect = new ToneMappingEffect({
+			mode: ToneMappingMode.REINHARD2_ADAPTIVE,
 			resolution: 256,
-			distinction: 1.0
+			whitePoint: 16.0,
+			middleGrey: 0.6,
+			minLuminance: 0.01,
+			averageLuminance: 0.01,
+			adaptationRate: 1.0
 		});
 
-		pass.renderToScreen = true;
-		this.toneMappingPass = pass;
-		composer.addPass(pass);
-
-	}
-
-	/**
-	 * Updates this demo.
-	 *
-	 * @param {Number} delta - The time since the last frame in seconds.
-	 */
-
-	update(delta) {
-
-		const object = this.object;
-
-		if(object !== null) {
-
-			object.rotation.x += 0.0005;
-			object.rotation.y += 0.001;
-
-			// Prevent overflow.
-			if(object.rotation.x >= TWO_PI) {
-
-				object.rotation.x -= TWO_PI;
-
-			}
-
-			if(object.rotation.y >= TWO_PI) {
-
-				object.rotation.y -= TWO_PI;
-
-			}
-
-		}
+		this.effect = toneMappingEffect;
+		composer.addPass(new EffectPass(camera, smaaEffect, toneMappingEffect));
 
 	}
 
 	/**
 	 * Registers configuration options.
 	 *
-	 * @param {GUI} gui - A GUI.
+	 * @param {GUI} menu - A menu.
 	 */
 
-	configure(gui) {
+	registerOptions(menu) {
 
-		const pass = this.toneMappingPass;
+		const renderer = this.composer.getRenderer();
+		const effect = this.effect;
+		const blendMode = effect.blendMode;
+		const adaptiveLuminancePass = effect.adaptiveLuminancePass;
+		const adaptiveLuminanceMaterial = adaptiveLuminancePass.getFullscreenMaterial();
 
 		const params = {
-			"resolution": Math.round(Math.log(pass.resolution) / Math.log(2)),
-			"adaptive": pass.adaptive,
-			"distinction": pass.luminosityMaterial.uniforms.distinction.value,
-			"adaption rate": pass.adaptiveLuminosityMaterial.uniforms.tau.value,
-			"average lum": pass.toneMappingMaterial.uniforms.averageLuminance.value,
-			"min lum": pass.adaptiveLuminosityMaterial.uniforms.minLuminance.value,
-			"max lum": pass.toneMappingMaterial.uniforms.maxLuminance.value,
-			"middle grey": pass.toneMappingMaterial.uniforms.middleGrey.value
+			"mode": effect.getMode(),
+			"exposure": renderer.toneMappingExposure,
+			"resolution": effect.resolution,
+			"white point": effect.uniforms.get("whitePoint").value,
+			"middle grey": effect.uniforms.get("middleGrey").value,
+			"average lum": effect.uniforms.get("averageLuminance").value,
+			"min lum": adaptiveLuminanceMaterial.uniforms.minLuminance.value,
+			"adaptation rate": adaptiveLuminancePass.adaptationRate,
+			"opacity": blendMode.opacity.value,
+			"blend mode": blendMode.blendFunction
 		};
 
-		gui.add(params, "resolution").min(6).max(11).step(1).onChange(function() {
+		menu.add(params, "mode", ToneMappingMode).onChange((value) => {
 
-			pass.resolution = Math.pow(2, params.resolution);
-
-		});
-
-		gui.add(params, "adaptive").onChange(function() {
-
-			pass.adaptive = params.adaptive;
+			effect.setMode(Number(value));
 
 		});
 
-		let f = gui.addFolder("Luminance");
+		menu.add(params, "exposure").min(0.0).max(2.0).step(0.001).onChange((value) => {
 
-		f.add(params, "distinction").min(1.0).max(10.0).step(0.1).onChange(function() {
-
-			pass.luminosityMaterial.uniforms.distinction.value = params.distinction;
+			renderer.toneMappingExposure = value;
 
 		});
 
-		f.add(params, "adaption rate").min(0.0).max(2.0).step(0.01).onChange(function() {
+		let f = menu.addFolder("Reinhard (Modified)");
 
-			pass.adaptiveLuminosityMaterial.uniforms.tau.value = params["adaption rate"];
+		f.add(params, "white point").min(2.0).max(32.0).step(0.01).onChange((value) => {
 
-		});
-
-		f.add(params, "average lum").min(0.01).max(1.0).step(0.01).onChange(function() {
-
-			pass.toneMappingMaterial.uniforms.averageLuminance.value = params["average lum"];
+			effect.uniforms.get("whitePoint").value = value;
 
 		});
 
-		f.add(params, "min lum").min(0.0).max(1.0).step(0.01).onChange(function() {
+		f.add(params, "middle grey").min(0.0).max(1.0).step(0.0001).onChange((value) => {
 
-			pass.adaptiveLuminosityMaterial.uniforms.minLuminance.value = params["min lum"];
-
-		});
-
-		f.add(params, "max lum").min(0.0).max(32.0).step(1).onChange(function() {
-
-			pass.toneMappingMaterial.uniforms.maxLuminance.value = params["max lum"];
+			effect.uniforms.get("middleGrey").value = value;
 
 		});
 
-		f.add(params, "middle grey").min(0.0).max(1.0).step(0.01).onChange(function() {
+		f.add(params, "average lum").min(0.0001).max(1.0).step(0.0001).onChange((value) => {
 
-			pass.toneMappingMaterial.uniforms.middleGrey.value = params["middle grey"];
+			effect.uniforms.get("averageLuminance").value = value;
 
 		});
 
 		f.open();
+
+		f = menu.addFolder("Reinhard (Adaptive)");
+
+		f.add(params, "resolution", [64, 128, 256, 512]).onChange((value) => {
+
+			effect.resolution = Number(value);
+
+		});
+
+		f.add(params, "adaptation rate").min(0.001).max(3.0).step(0.001).onChange((value) => {
+
+			adaptiveLuminancePass.adaptationRate = value;
+
+		});
+
+		f.add(params, "min lum").min(0.001).max(1.0).step(0.001).onChange((value) => {
+
+			adaptiveLuminanceMaterial.uniforms.minLuminance.value = value;
+
+		});
+
+		f.open();
+
+		menu.add(params, "opacity").min(0.0).max(1.0).step(0.01).onChange((value) => {
+
+			blendMode.opacity.value = value;
+
+		});
+
+		menu.add(params, "blend mode", BlendFunction).onChange((value) => {
+
+			blendMode.setBlendFunction(Number(value));
+
+		});
 
 	}
 

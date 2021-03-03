@@ -1,13 +1,78 @@
-import { Scene, Mesh, OrthographicCamera, PlaneBufferGeometry } from "three";
+import {
+	BufferAttribute,
+	BufferGeometry,
+	Camera,
+	Mesh,
+	Scene
+} from "three";
+
+/**
+ * A dummy camera
+ *
+ * @type {Camera}
+ * @private
+ */
+
+const dummyCamera = new Camera();
+
+/**
+ * Shared fullscreen geometry.
+ *
+ * @type {BufferGeometry}
+ * @private
+ */
+
+let geometry = null;
+
+/**
+ * Returns a shared fullscreen triangle.
+ *
+ * The size of the screen is 2x2 units (NDC). A triangle that fills the screen
+ * needs to be 4 units wide and 4 units tall.
+ *
+ * @private
+ * @return {BufferGeometry} The fullscreen geometry.
+ */
+
+function getFullscreenTriangle() {
+
+	if(geometry === null) {
+
+		const vertices = new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]);
+		const uvs = new Float32Array([0, 0, 2, 0, 0, 2]);
+		geometry = new BufferGeometry();
+
+		// Added for backward compatibility (setAttribute was added in three r110).
+		if(geometry.setAttribute !== undefined) {
+
+			geometry.setAttribute("position", new BufferAttribute(vertices, 3));
+			geometry.setAttribute("uv", new BufferAttribute(uvs, 2));
+
+		} else {
+
+			geometry.addAttribute("position", new BufferAttribute(vertices, 3));
+			geometry.addAttribute("uv", new BufferAttribute(uvs, 2));
+
+		}
+
+	}
+
+	return geometry;
+
+}
 
 /**
  * An abstract pass.
  *
  * Passes that do not rely on the depth buffer should explicitly disable the
- * depth test and depth write in their respective shader materials.
+ * depth test and depth write flags of their fullscreen shader material.
  *
- * This class implements a {@link Pass#dispose} method that frees memory on
- * demand.
+ * Fullscreen passes use a shared fullscreen triangle:
+ * https://michaldrobot.com/2014/04/01/gcn-execution-patterns-in-full-screen-passes/
+ *
+ * @implements {Initializable}
+ * @implements {Resizable}
+ * @implements {Disposable}
  */
 
 export class Pass {
@@ -15,16 +80,12 @@ export class Pass {
 	/**
 	 * Constructs a new pass.
 	 *
-	 * @param {Scene} [scene] - The scene to render.
-	 * @param {Camera} [camera] - The camera.
-	 * @param {Mesh} [quad] - A quad that fills the screen to render 2D filter effects. Set this to null, if you don't need it (see {@link RenderPass}).
+	 * @param {String} [name] - The name of this pass. Does not have to be unique.
+	 * @param {Scene} [scene] - The scene to render. The default scene contains a single mesh that fills the screen.
+	 * @param {Camera} [camera] - A camera. Fullscreen effect passes don't require a camera.
 	 */
 
-	constructor(
-		scene = new Scene(),
-		camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1),
-		quad = new Mesh(new PlaneBufferGeometry(2, 2), null)
-	) {
+	constructor(name = "Pass", scene = new Scene(), camera = dummyCamera) {
 
 		/**
 		 * The name of this pass.
@@ -32,14 +93,13 @@ export class Pass {
 		 * @type {String}
 		 */
 
-		this.name = "Pass";
+		this.name = name;
 
 		/**
 		 * The scene to render.
 		 *
 		 * @type {Scene}
 		 * @protected
-		 * @default new Scene()
 		 */
 
 		this.scene = scene;
@@ -49,68 +109,178 @@ export class Pass {
 		 *
 		 * @type {Camera}
 		 * @protected
-		 * @default new OrthographicCamera(-1, 1, 1, -1, 0, 1)
 		 */
 
 		this.camera = camera;
 
 		/**
-		 * A quad mesh that fills the screen.
-		 *
-		 * Assign your shader material to this mesh!
+		 * A mesh that fills the screen.
 		 *
 		 * @type {Mesh}
-		 * @protected
-		 * @default new Mesh(new PlaneBufferGeometry(2, 2), null)
-		 * @example this.quad.material = this.myMaterial;
+		 * @private
 		 */
 
-		this.quad = quad;
-
-		if(this.quad !== null) {
-
-			this.quad.frustumCulled = false;
-
-			if(this.scene !== null) {
-
-				this.scene.add(this.quad);
-
-			}
-
-		}
+		this.screen = null;
 
 		/**
-		 * Indicates whether the read and write buffers should be swapped after this
-		 * pass has finished rendering.
-		 *
-		 * Set this to true if this pass renders to the write buffer so that a
-		 * following pass can find the result in the read buffer.
+		 * Indicates whether this pass should render to texture.
 		 *
 		 * @type {Boolean}
-		 * @default false
+		 * @private
 		 */
 
-		this.needsSwap = false;
+		this.rtt = true;
 
 		/**
-		 * Enabled flag.
+		 * Only relevant for subclassing.
+		 *
+		 * Indicates whether the {@link EffectComposer} should swap the frame
+		 * buffers after this pass has finished rendering.
+		 *
+		 * Set this to `false` if this pass doesn't render to the output buffer or
+		 * the screen. Otherwise, the contents of the input buffer will be lost.
 		 *
 		 * @type {Boolean}
-		 * @default true
+		 */
+
+		this.needsSwap = true;
+
+		/**
+		 * Only relevant for subclassing.
+		 *
+		 * Indicates whether the {@link EffectComposer} should prepare a depth
+		 * texture for this pass.
+		 *
+		 * Set this to `true` if this pass relies on depth information from a
+		 * preceding {@link RenderPass}.
+		 *
+		 * @type {Boolean}
+		 */
+
+		this.needsDepthTexture = false;
+
+		/**
+		 * Indicates whether this pass should be executed.
+		 *
+		 * @type {Boolean}
 		 */
 
 		this.enabled = true;
 
-		/**
-		 * Render to screen flag.
-		 *
-		 * @type {Boolean}
-		 * @default false
-		 */
+	}
 
-		this.renderToScreen = false;
+	/**
+	 * Indicates whether this pass should render to screen.
+	 *
+	 * @type {Boolean}
+	 */
+
+	get renderToScreen() {
+
+		return !this.rtt;
 
 	}
+
+	/**
+	 * Sets the render to screen flag.
+	 *
+	 * If the flag is changed to a different value, the fullscreen material will
+	 * be updated as well.
+	 *
+	 * @type {Boolean}
+	 */
+
+	set renderToScreen(value) {
+
+		if(this.rtt === value) {
+
+			const material = this.getFullscreenMaterial();
+
+			if(material !== null) {
+
+				material.needsUpdate = true;
+
+			}
+
+			this.rtt = !value;
+
+		}
+
+	}
+
+	/**
+	 * Returns the current fullscreen material.
+	 *
+	 * @return {Material} The current fullscreen material, or null if there is none.
+	 */
+
+	getFullscreenMaterial() {
+
+		return (this.screen !== null) ? this.screen.material : null;
+
+	}
+
+	/**
+	 * Sets the fullscreen material.
+	 *
+	 * The material will be assigned to a mesh that fills the screen. The mesh
+	 * will be created once a material is assigned via this method.
+	 *
+	 * @protected
+	 * @param {Material} material - A fullscreen material.
+	 */
+
+	setFullscreenMaterial(material) {
+
+		let screen = this.screen;
+
+		if(screen !== null) {
+
+			screen.material = material;
+
+		} else {
+
+			screen = new Mesh(getFullscreenTriangle(), material);
+			screen.frustumCulled = false;
+
+			if(this.scene === null) {
+
+				this.scene = new Scene();
+
+			}
+
+			this.scene.add(screen);
+			this.screen = screen;
+
+		}
+
+	}
+
+	/**
+	 * Returns the current depth texture.
+	 *
+	 * @return {Texture} The current depth texture, or null if there is none.
+	 */
+
+	getDepthTexture() {
+
+		return null;
+
+	}
+
+	/**
+	 * Sets the depth texture.
+	 *
+	 * This method will be called automatically by the {@link EffectComposer}.
+	 *
+	 * You may override this method if your pass relies on the depth information
+	 * of a preceding {@link RenderPass}.
+	 *
+	 * @param {Texture} depthTexture - A depth texture.
+	 * @param {Number} [depthPacking=0] - The depth packing.
+	 */
+
+	setDepthTexture(depthTexture, depthPacking = 0) {}
 
 	/**
 	 * Renders the effect.
@@ -120,13 +290,13 @@ export class Pass {
 	 * @abstract
 	 * @throws {Error} An error is thrown if the method is not overridden.
 	 * @param {WebGLRenderer} renderer - The renderer.
-	 * @param {WebGLRenderTarget} readBuffer - A read buffer. Contains the result of the previous pass.
-	 * @param {WebGLRenderTarget} writeBuffer - A write buffer. Normally used as the render target when the read buffer is used as input.
-	 * @param {Number} [delta] - The delta time.
-	 * @param {Boolean} [maskActive] - Indicates whether a stencil test mask is active or not.
+	 * @param {WebGLRenderTarget} inputBuffer - A frame buffer that contains the result of the previous pass.
+	 * @param {WebGLRenderTarget} outputBuffer - A frame buffer that serves as the output render target unless this pass renders to screen.
+	 * @param {Number} [deltaTime] - The time between the last frame and the current one in seconds.
+	 * @param {Boolean} [stencilTest] - Indicates whether a stencil mask is active.
 	 */
 
-	render(renderer, readBuffer, writeBuffer, delta, maskActive) {
+	render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
 
 		throw new Error("Render method not implemented!");
 
@@ -135,11 +305,11 @@ export class Pass {
 	/**
 	 * Updates this pass with the renderer's size.
 	 *
-	 * You may override this method in case you want to be informed about the main
-	 * render size.
+	 * You may override this method in case you want to be informed about the size
+	 * of the main frame buffer.
 	 *
 	 * The {@link EffectComposer} calls this method before this pass is
-	 * initialised and every time its own size is updated.
+	 * initialized and every time its own size is updated.
 	 *
 	 * @param {Number} width - The renderer's width.
 	 * @param {Number} height - The renderer's height.
@@ -149,7 +319,7 @@ export class Pass {
 	setSize(width, height) {}
 
 	/**
-	 * Performs initialisation tasks.
+	 * Performs initialization tasks.
 	 *
 	 * By overriding this method you gain access to the renderer. You'll also be
 	 * able to configure your custom render targets to use the appropriate format
@@ -159,24 +329,19 @@ export class Pass {
 	 * targets by performing a preliminary render operation.
 	 *
 	 * The {@link EffectComposer} calls this method when this pass is added to its
-	 * queue.
+	 * queue, but not before its size has been set.
 	 *
-	 * @method initialise
 	 * @param {WebGLRenderer} renderer - The renderer.
 	 * @param {Boolean} alpha - Whether the renderer uses the alpha channel or not.
-	 * @example if(!alpha) { this.myRenderTarget.texture.format = RGBFormat; }
+	 * @param {Number} frameBufferType - The type of the main frame buffers.
+	 * @example if(!alpha && frameBufferType === UnsignedByteType) { this.myRenderTarget.texture.format = RGBFormat; }
 	 */
 
-	initialise(renderer, alpha) {}
+	initialize(renderer, alpha, frameBufferType) {}
 
 	/**
-	 * Performs a shallow search for properties that define a dispose method and
-	 * deletes them. The pass will be inoperative after this method was called!
-	 *
-	 * Disposable objects:
-	 *  - render targets
-	 *  - materials
-	 *  - textures
+	 * Performs a shallow search for disposable properties and deletes them. The
+	 * pass will be inoperative after this method was called!
 	 *
 	 * The {@link EffectComposer} calls this method when it is being destroyed.
 	 * You may, however, use it independently to free memory when you are certain
@@ -185,16 +350,28 @@ export class Pass {
 
 	dispose() {
 
-		const keys = Object.keys(this);
+		const material = this.getFullscreenMaterial();
 
-		let key;
+		if(material !== null) {
 
-		for(key of keys) {
+			material.dispose();
 
-			if(this[key] !== null && typeof this[key].dispose === "function") {
+		}
 
+		for(const key of Object.keys(this)) {
+
+			const property = this[key];
+
+			if(property !== null && typeof property.dispose === "function") {
+
+				if(property instanceof Scene) {
+
+					continue;
+
+				}
+
+				/** @ignore */
 				this[key].dispose();
-				this[key] = null;
 
 			}
 

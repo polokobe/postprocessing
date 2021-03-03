@@ -1,9 +1,12 @@
-import { Pass } from "./Pass.js";
+import { Pass } from "./Pass";
 
 /**
  * A shader pass.
  *
- * Used to render any shader material as a 2D filter.
+ * Renders any shader material as a fullscreen effect.
+ *
+ * This pass should not be used to create multiple chained effects. For a more
+ * efficient solution, please refer to the {@link EffectPass}.
  */
 
 export class ShaderPass extends Pass {
@@ -11,44 +14,55 @@ export class ShaderPass extends Pass {
 	/**
 	 * Constructs a new shader pass.
 	 *
-	 * @param {ShaderMaterial} material - The shader material to use.
-	 * @param {String} [textureID="tDiffuse"] - The texture uniform identifier.
+	 * @param {ShaderMaterial} material - A shader material.
+	 * @param {String} [input="inputBuffer"] - The name of the input buffer uniform.
 	 */
 
-	constructor(material, textureID = "tDiffuse") {
+	constructor(material, input = "inputBuffer") {
 
-		super();
+		super("ShaderPass");
 
-		/**
-		 * The name of this pass.
-		 */
-
-		this.name = "ShaderPass";
+		this.setFullscreenMaterial(material);
 
 		/**
-		 * This pass renders to the write buffer.
-		 */
-
-		this.needsSwap = true;
-
-		/**
-		 * The shader material to use for rendering.
-		 *
-		 * @type {ShaderMaterial}
-		 */
-
-		this.material = material;
-
-		this.quad.material = this.material;
-
-		/**
-		 * The name of the color sampler uniform of the given material.
+		 * The input buffer uniform.
 		 *
 		 * @type {String}
-		 * @default "tDiffuse"
+		 * @private
 		 */
 
-		this.textureID = textureID;
+		this.uniform = null;
+		this.setInput(input);
+
+	}
+
+	/**
+	 * Sets the name of the input buffer uniform.
+	 *
+	 * Most fullscreen materials modify texels from an input texture. This pass
+	 * automatically assigns the main input buffer to the uniform identified by
+	 * the given name.
+	 *
+	 * @param {String} input - The name of the input buffer uniform.
+	 */
+
+	setInput(input) {
+
+		const material = this.getFullscreenMaterial();
+
+		this.uniform = null;
+
+		if(material !== null) {
+
+			const uniforms = material.uniforms;
+
+			if(uniforms !== undefined && uniforms[input] !== undefined) {
+
+				this.uniform = uniforms[input];
+
+			}
+
+		}
 
 	}
 
@@ -56,19 +70,22 @@ export class ShaderPass extends Pass {
 	 * Renders the effect.
 	 *
 	 * @param {WebGLRenderer} renderer - The renderer.
-	 * @param {WebGLRenderTarget} readBuffer - The read buffer.
-	 * @param {WebGLRenderTarget} writeBuffer - The write buffer.
+	 * @param {WebGLRenderTarget} inputBuffer - A frame buffer that contains the result of the previous pass.
+	 * @param {WebGLRenderTarget} outputBuffer - A frame buffer that serves as the output render target unless this pass renders to screen.
+	 * @param {Number} [deltaTime] - The time between the last frame and the current one in seconds.
+	 * @param {Boolean} [stencilTest] - Indicates whether a stencil mask is active.
 	 */
 
-	render(renderer, readBuffer, writeBuffer) {
+	render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
 
-		if(this.material.uniforms[this.textureID] !== undefined) {
+		if(this.uniform !== null && inputBuffer !== null) {
 
-			this.material.uniforms[this.textureID].value = readBuffer.texture;
+			this.uniform.value = inputBuffer.texture;
 
 		}
 
-		renderer.render(this.scene, this.camera, this.renderToScreen ? null : writeBuffer);
+		renderer.setRenderTarget(this.renderToScreen ? null : outputBuffer);
+		renderer.render(this.scene, this.camera);
 
 	}
 

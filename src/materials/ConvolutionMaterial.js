@@ -1,10 +1,12 @@
-import { ShaderMaterial, Uniform, Vector2 } from "three";
+import { NoBlending, ShaderMaterial, Uniform, Vector2 } from "three";
 
-import fragment from "./glsl/convolution/shader.frag";
-import vertex from "./glsl/convolution/shader.vert";
+import fragmentShader from "./glsl/convolution/shader.frag";
+import vertexShader from "./glsl/convolution/shader.vert";
 
 /**
  * An optimised convolution shader material.
+ *
+ * This material supports dithering.
  *
  * Based on the GDC2003 Presentation by Masaki Kawase, Bunkasha Games:
  *  Frame Buffer Postprocessing Effects in DOUBLE-S.T.E.A.L (Wreckless)
@@ -13,6 +15,8 @@ import vertex from "./glsl/convolution/shader.vert";
  *
  * Further modified according to Apple's
  * [Best Practices for Shaders](https://goo.gl/lmRoM5).
+ *
+ * @todo Remove dithering code from fragment shader.
  */
 
 export class ConvolutionMaterial extends ShaderMaterial {
@@ -30,21 +34,24 @@ export class ConvolutionMaterial extends ShaderMaterial {
 			type: "ConvolutionMaterial",
 
 			uniforms: {
-
-				tDiffuse: new Uniform(null),
+				inputBuffer: new Uniform(null),
 				texelSize: new Uniform(new Vector2()),
 				halfTexelSize: new Uniform(new Vector2()),
-				kernel: new Uniform(0.0)
-
+				kernel: new Uniform(0.0),
+				scale: new Uniform(1.0)
 			},
 
-			fragmentShader: fragment,
-			vertexShader: vertex,
+			fragmentShader,
+			vertexShader,
 
+			blending: NoBlending,
 			depthWrite: false,
 			depthTest: false
 
 		});
+
+		/** @ignore */
+		this.toneMapped = false;
 
 		this.setTexelSize(texelSize.x, texelSize.y);
 
@@ -52,7 +59,6 @@ export class ConvolutionMaterial extends ShaderMaterial {
 		 * The current kernel size.
 		 *
 		 * @type {KernelSize}
-		 * @default KernelSize.LARGE
 		 */
 
 		this.kernelSize = KernelSize.LARGE;

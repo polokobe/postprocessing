@@ -1,7 +1,7 @@
-import { Pass } from "./Pass.js";
+import { Pass } from "./Pass";
 
 /**
- * A pass that disables the stencil mask.
+ * A pass that disables the stencil test.
  */
 
 export class ClearMaskPass extends Pass {
@@ -12,25 +12,28 @@ export class ClearMaskPass extends Pass {
 
 	constructor() {
 
-		super(null, null, null);
+		super("ClearMaskPass", null, null);
 
-		/**
-		 * The name of this pass.
-		 */
-
-		this.name = "ClearMaskPass";
+		this.needsSwap = false;
 
 	}
 
 	/**
-	 * Disables the stencil test.
+	 * Disables the global stencil test.
 	 *
 	 * @param {WebGLRenderer} renderer - The renderer.
+	 * @param {WebGLRenderTarget} inputBuffer - A frame buffer that contains the result of the previous pass.
+	 * @param {WebGLRenderTarget} outputBuffer - A frame buffer that serves as the output render target unless this pass renders to screen.
+	 * @param {Number} [deltaTime] - The time between the last frame and the current one in seconds.
+	 * @param {Boolean} [stencilTest] - Indicates whether a stencil mask is active.
 	 */
 
-	render(renderer) {
+	render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
 
-		renderer.state.buffers.stencil.setTest(false);
+		const stencil = renderer.state.buffers.stencil;
+
+		stencil.setLocked(false);
+		stencil.setTest(false);
 
 	}
 

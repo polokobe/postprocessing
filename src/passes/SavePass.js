@@ -1,6 +1,6 @@
-import { LinearFilter, RGBFormat, WebGLRenderTarget } from "three";
+import { LinearFilter, RGBFormat, UnsignedByteType, WebGLRenderTarget } from "three";
 import { CopyMaterial } from "../materials";
-import { Pass } from "./Pass.js";
+import { Pass } from "./Pass";
 
 /**
  * A pass that renders the result from a previous pass to another render target.
@@ -11,30 +11,17 @@ export class SavePass extends Pass {
 	/**
 	 * Constructs a new save pass.
 	 *
-	 * @param {WebGLRenderTarget} [renderTarget] - The render target to use for saving the read buffer.
-	 * @param {Boolean} [resize=true] - Whether the render target should adjust to the size of the read/write buffer.
+	 * @param {WebGLRenderTarget} [renderTarget] - A render target.
+	 * @param {Boolean} [resize=true] - Whether the render target should adjust to the size of the input buffer.
 	 */
 
 	constructor(renderTarget, resize = true) {
 
-		super();
+		super("SavePass");
 
-		/**
-		 * The name of this pass.
-		 */
+		this.setFullscreenMaterial(new CopyMaterial());
 
-		this.name = "SavePass";
-
-		/**
-		 * Copy shader material.
-		 *
-		 * @type {CopyMaterial}
-		 * @private
-		 */
-
-		this.material = new CopyMaterial();
-
-		this.quad.material = this.material;
+		this.needsSwap = false;
 
 		/**
 		 * The render target.
@@ -42,22 +29,25 @@ export class SavePass extends Pass {
 		 * @type {WebGLRenderTarget}
 		 */
 
-		this.renderTarget = (renderTarget !== undefined) ? renderTarget : new WebGLRenderTarget(1, 1, {
-			minFilter: LinearFilter,
-			magFilter: LinearFilter,
-			stencilBuffer: false,
-			depthBuffer: false
-		});
+		this.renderTarget = renderTarget;
 
-		this.renderTarget.texture.name = "Save.Target";
-		this.renderTarget.texture.generateMipmaps = false;
+		if(renderTarget === undefined) {
+
+			this.renderTarget = new WebGLRenderTarget(1, 1, {
+				minFilter: LinearFilter,
+				magFilter: LinearFilter,
+				stencilBuffer: false,
+				depthBuffer: false
+			});
+
+			this.renderTarget.texture.name = "SavePass.Target";
+
+		}
 
 		/**
-		 * Indicates whether the render target should be resized when the size of
-		 * the composer's read/write buffer changes.
+		 * Indicates whether the render target should be resized automatically.
 		 *
 		 * @type {Boolean}
-		 * @default true
 		 */
 
 		this.resize = resize;
@@ -65,39 +55,38 @@ export class SavePass extends Pass {
 	}
 
 	/**
-	 * Saves the read buffer.
+	 * The saved texture.
 	 *
-	 * @param {WebGLRenderer} renderer - The renderer.
-	 * @param {WebGLRenderTarget} readBuffer - The read buffer.
+	 * @type {Texture}
 	 */
 
-	render(renderer, readBuffer) {
+	get texture() {
 
-		this.material.uniforms.tDiffuse.value = readBuffer.texture;
-
-		renderer.render(this.scene, this.camera, this.renderTarget);
+		return this.renderTarget.texture;
 
 	}
 
 	/**
-	 * Adjusts the format of the render target.
+	 * Saves the input buffer.
 	 *
 	 * @param {WebGLRenderer} renderer - The renderer.
-	 * @param {Boolean} alpha - Whether the renderer uses the alpha channel or not.
+	 * @param {WebGLRenderTarget} inputBuffer - A frame buffer that contains the result of the previous pass.
+	 * @param {WebGLRenderTarget} outputBuffer - A frame buffer that serves as the output render target unless this pass renders to screen.
+	 * @param {Number} [deltaTime] - The time between the last frame and the current one in seconds.
+	 * @param {Boolean} [stencilTest] - Indicates whether a stencil mask is active.
 	 */
 
-	initialise(renderer, alpha) {
+	render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
 
-		if(!alpha) {
+		this.getFullscreenMaterial().uniforms.inputBuffer.value = inputBuffer.texture;
 
-			this.renderTarget.texture.format = RGBFormat;
-
-		}
+		renderer.setRenderTarget(this.renderToScreen ? null : this.renderTarget);
+		renderer.render(this.scene, this.camera);
 
 	}
 
 	/**
-	 * Updates this pass with the renderer's size.
+	 * Updates the size of this pass.
 	 *
 	 * @param {Number} width - The width.
 	 * @param {Number} height - The height.
@@ -107,10 +96,34 @@ export class SavePass extends Pass {
 
 		if(this.resize) {
 
-			width = Math.max(1, width);
-			height = Math.max(1, height);
+			const w = Math.max(width, 1);
+			const h = Math.max(height, 1);
 
-			this.renderTarget.setSize(width, height);
+			this.renderTarget.setSize(w, h);
+
+		}
+
+	}
+
+	/**
+	 * Performs initialization tasks.
+	 *
+	 * @param {WebGLRenderer} renderer - A renderer.
+	 * @param {Boolean} alpha - Whether the renderer uses the alpha channel.
+	 * @param {Number} frameBufferType - The type of the main frame buffers.
+	 */
+
+	initialize(renderer, alpha, frameBufferType) {
+
+		if(!alpha && frameBufferType === UnsignedByteType) {
+
+			this.renderTarget.texture.format = RGBFormat;
+
+		}
+
+		if(frameBufferType !== undefined) {
+
+			this.renderTarget.texture.type = frameBufferType;
 
 		}
 

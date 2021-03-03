@@ -1,18 +1,11 @@
-"use strict";
+import test from "ava";
+import { Pass } from "../../";
 
-const Pass = require("../../build/postprocessing").Pass;
+test("can be created and destroyed", t => {
 
-module.exports = {
+	const object = new Pass();
+	object.dispose();
 
-	"Pass": {
+	t.pass();
 
-		"defines a dispose method": function(test) {
-
-			test.equal(typeof Pass.prototype.dispose, "function");
-			test.done();
-
-		}
-
-	}
-
-};
+});

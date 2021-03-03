@@ -1,20 +1,11 @@
-"use strict";
+import test from "ava";
+import { BlurPass } from "../../";
 
-const BlurPass = require("../../build/postprocessing").BlurPass;
+test("can be created and destroyed", t => {
 
-module.exports = {
+	const object = new BlurPass();
+	object.dispose();
 
-	"Blur": {
+	t.pass();
 
-		"can be created and destroyed": function(test) {
-
-			const pass = new BlurPass();
-			test.ok(pass);
-			pass.dispose();
-			test.done();
-
-		}
-
-	}
-
-};
+});

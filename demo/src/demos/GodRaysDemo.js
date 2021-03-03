@@ -1,26 +1,37 @@
 import {
 	AmbientLight,
-	BufferAttribute,
-	BufferGeometry,
-	CubeTextureLoader,
-	DirectionalLight,
-	MeshPhongMaterial,
-	ObjectLoader,
-	OrbitControls,
-	Points,
-	PointsMaterial,
-	RepeatWrapping,
-	TextureLoader
+	Color,
+	Group,
+	Mesh,
+	MeshBasicMaterial,
+	PerspectiveCamera,
+	PointLight,
+	SphereBufferGeometry,
+	Vector3
 } from "three";
 
-import { GodRaysPass, KernelSize, RenderPass } from "../../../src";
-import { Demo } from "./Demo.js";
+import { SpatialControls } from "spatial-controls";
+import { ProgressManager } from "../utils/ProgressManager";
+import { PostProcessingDemo } from "./PostProcessingDemo";
+
+import * as Sponza from "./objects/Sponza";
+
+import {
+	BlendFunction,
+	EdgeDetectionMode,
+	EffectPass,
+	GodRaysEffect,
+	KernelSize,
+	SMAAEffect,
+	SMAAImageLoader,
+	SMAAPreset
+} from "../../../src";
 
 /**
  * A god rays demo setup.
  */
 
-export class GodRaysDemo extends Demo {
+export class GodRaysDemo extends PostProcessingDemo {
 
 	/**
 	 * Constructs a new god rays demo.
@@ -30,16 +41,25 @@ export class GodRaysDemo extends Demo {
 
 	constructor(composer) {
 
-		super(composer);
+		super("god-rays", composer);
 
 		/**
-		 * A god rays pass.
+		 * A pass.
 		 *
-		 * @type {GodRaysPass}
+		 * @type {Pass}
 		 * @private
 		 */
 
-		this.godRaysPass = null;
+		this.pass = null;
+
+		/**
+		 * An effect.
+		 *
+		 * @type {Effect}
+		 * @private
+		 */
+
+		this.effect = null;
 
 		/**
 		 * A sun.
@@ -51,92 +71,54 @@ export class GodRaysDemo extends Demo {
 		this.sun = null;
 
 		/**
-		 * A directional light.
+		 * A light.
 		 *
-		 * @type {DirectionalLight}
+		 * @type {Light}
 		 * @private
 		 */
 
-		this.directionalLight = null;
+		this.light = null;
 
 	}
 
 	/**
 	 * Loads scene assets.
 	 *
-	 * @param {Function} callback - A callback function.
+	 * @return {Promise} A promise that returns a collection of assets.
 	 */
 
-	load(callback) {
+	load() {
 
-		const assets = new Map();
+		const assets = this.assets;
 		const loadingManager = this.loadingManager;
-		const cubeTextureLoader = new CubeTextureLoader(loadingManager);
-		const textureLoader = new TextureLoader(loadingManager);
-		const modelLoader = new ObjectLoader(loadingManager);
+		const smaaImageLoader = new SMAAImageLoader(loadingManager);
 
-		const path = "textures/skies/starry/";
-		const format = ".png";
-		const urls = [
-			path + "px" + format, path + "nx" + format,
-			path + "py" + format, path + "ny" + format,
-			path + "pz" + format, path + "nz" + format
-		];
+		const anisotropy = Math.min(this.composer.getRenderer().capabilities.getMaxAnisotropy(), 8);
 
-		if(this.assets === null) {
+		return new Promise((resolve, reject) => {
 
-			loadingManager.onProgress = (item, loaded, total) => {
+			if(assets.size === 0) {
 
-				if(loaded === total) {
+				loadingManager.onLoad = () => setTimeout(resolve, 250);
+				loadingManager.onProgress = ProgressManager.updateProgress;
+				loadingManager.onError = (url) => console.error(`Failed to load ${url}`);
 
-					this.assets = assets;
+				Sponza.load(assets, loadingManager, anisotropy);
 
-					callback();
+				smaaImageLoader.load(([search, area]) => {
 
-				}
+					assets.set("smaa-search", search);
+					assets.set("smaa-area", area);
 
-			};
+				});
 
-			cubeTextureLoader.load(urls, function(textureCube) {
+			} else {
 
-				assets.set("sky", textureCube);
+				resolve();
 
-			});
+			}
 
-			modelLoader.load("models/waggon.json", function(object) {
-
-				object.rotation.x = Math.PI * 0.25;
-				object.rotation.y = Math.PI * 0.75;
-
-				assets.set("waggon", object);
-
-			});
-
-			textureLoader.load("textures/wood.jpg", function(texture) {
-
-				texture.wrapS = texture.wrapT = RepeatWrapping;
-				assets.set("wood-diffuse", texture);
-
-			});
-
-			textureLoader.load("textures/woodnormals.jpg", function(texture) {
-
-				texture.wrapS = texture.wrapT = RepeatWrapping;
-				assets.set("wood-normals", texture);
-
-			});
-
-			textureLoader.load("textures/sun.png", function(texture) {
-
-				assets.set("sun-diffuse", texture);
-
-			});
-
-		} else {
-
-			callback();
-
-		}
+		});
 
 	}
 
@@ -144,97 +126,103 @@ export class GodRaysDemo extends Demo {
 	 * Creates the scene.
 	 */
 
-	initialise() {
+	initialize() {
 
 		const scene = this.scene;
-		const camera = this.camera;
 		const assets = this.assets;
 		const composer = this.composer;
+		const renderer = composer.getRenderer();
 
-		// Controls.
+		// Camera
 
-		this.controls = new OrbitControls(camera, composer.renderer.domElement);
-		this.controls.target.set(0, 0.5, 0);
+		const aspect = window.innerWidth / window.innerHeight;
+		const camera = new PerspectiveCamera(50, aspect, 0.3, 2000);
+		camera.position.set(9.25, 2.4, 1);
+		this.camera = camera;
 
-		// Camera.
+		// Controls
 
-		camera.position.set(-5, -1, -4);
-		camera.lookAt(this.controls.target);
+		const target = new Vector3(8.4, 2.15, 0.5);
+		const controls = new SpatialControls(camera.position, camera.quaternion, renderer.domElement);
+		controls.settings.pointer.lock = false;
+		controls.settings.translation.enabled = true;
+		controls.settings.sensitivity.rotation = 2.2;
+		controls.settings.sensitivity.translation = 3.0;
+		controls.lookAt(target);
+		controls.setOrbitEnabled(false);
+		this.controls = controls;
 
-		// Sky.
+		// Sky
 
-		scene.background = assets.get("sky");
+		scene.background = new Color(0x000000);
 
-		// Lights.
+		// Lights
 
-		const ambientLight = new AmbientLight(0x0f0f0f);
-		const directionalLight = new DirectionalLight(0xffbbaa);
+		const ambientLight = new AmbientLight(0x101010);
 
-		directionalLight.position.set(-1, 1, 1);
-		directionalLight.target.position.copy(scene.position);
+		const mainLight = new PointLight(0xffe3b1);
+		mainLight.position.set(-0.5, 3, -0.25);
+		mainLight.castShadow = true;
+		mainLight.shadow.mapSize.width = 1024;
+		mainLight.shadow.mapSize.height = 1024;
+		this.light = mainLight;
 
-		this.directionalLight = directionalLight;
+		scene.add(ambientLight, mainLight);
 
-		scene.add(directionalLight);
-		scene.add(ambientLight);
+		// Sun
 
-		// Objects.
-
-		const object = assets.get("waggon");
-		const material = new MeshPhongMaterial({
-			color: 0xffffff,
-			map: assets.get("wood-diffuse"),
-			normalMap: assets.get("wood-normals"),
-			fog: true
-		});
-
-		object.traverse(function(child) {
-
-			child.material = material;
-
-		});
-
-		scene.add(object);
-
-		// Sun.
-
-		const sunMaterial = new PointsMaterial({
-			map: assets.get("sun-diffuse"),
-			size: 100,
-			sizeAttenuation: true,
+		const sunMaterial = new MeshBasicMaterial({
 			color: 0xffddaa,
-			alphaTest: 0,
 			transparent: true,
 			fog: false
 		});
 
-		const sunGeometry = new BufferGeometry();
-		sunGeometry.addAttribute("position", new BufferAttribute(new Float32Array(3), 3));
-		const sun = new Points(sunGeometry, sunMaterial);
+		const sunGeometry = new SphereBufferGeometry(0.75, 32, 32);
+		const sun = new Mesh(sunGeometry, sunMaterial);
 		sun.frustumCulled = false;
-		sun.position.set(75, 25, 100);
+		sun.matrixAutoUpdate = false;
+		// sun.position.copy(this.light.position);
+		// sun.updateMatrix();
 
+		// Using a group to check if matrix updates work correctly.
+		const group = new Group();
+		group.position.copy(this.light.position);
+		group.add(sun);
+
+		// The sun is not added to the scene to hide hard geometry edges.
+		// scene.add(group);
 		this.sun = sun;
-		scene.add(sun);
 
-		// Passes.
+		// Objects
 
-		composer.addPass(new RenderPass(scene, camera));
+		scene.add(assets.get(Sponza.tag));
 
-		const pass = new GodRaysPass(scene, camera, sun, {
-			resolutionScale: 0.6,
+		// Passes
+
+		const smaaEffect = new SMAAEffect(
+			assets.get("smaa-search"),
+			assets.get("smaa-area"),
+			SMAAPreset.HIGH,
+			EdgeDetectionMode.DEPTH
+		);
+
+		smaaEffect.edgeDetectionMaterial.setEdgeDetectionThreshold(0.01);
+
+		const godRaysEffect = new GodRaysEffect(camera, sun, {
+			height: 480,
 			kernelSize: KernelSize.SMALL,
-			intensity: 1.0,
 			density: 0.96,
-			decay: 0.93,
-			weight: 0.4,
-			exposure: 0.6,
+			decay: 0.92,
+			weight: 0.3,
+			exposure: 0.54,
 			samples: 60,
 			clampMax: 1.0
 		});
 
-		pass.renderToScreen = true;
-		this.godRaysPass = pass;
+		const pass = new EffectPass(camera, smaaEffect, godRaysEffect);
+		this.effect = godRaysEffect;
+		this.pass = pass;
+
 		composer.addPass(pass);
 
 	}
@@ -242,94 +230,98 @@ export class GodRaysDemo extends Demo {
 	/**
 	 * Registers configuration options.
 	 *
-	 * @param {GUI} gui - A GUI.
+	 * @param {GUI} menu - A menu.
 	 */
 
-	configure(gui) {
+	registerOptions(menu) {
 
-		const directionalLight = this.directionalLight;
-		const composer = this.composer;
-		const pass = this.godRaysPass;
+		const color = new Color();
+
 		const sun = this.sun;
+		const light = this.light;
+
+		const pass = this.pass;
+		const effect = this.effect;
+		const uniforms = effect.godRaysMaterial.uniforms;
+		const blendMode = effect.blendMode;
 
 		const params = {
-			"resolution": pass.resolutionScale,
-			"blurriness": pass.kernelSize,
-			"intensity": pass.intensity,
-			"density": pass.godRaysMaterial.uniforms.density.value,
-			"decay": pass.godRaysMaterial.uniforms.decay.value,
-			"weight": pass.godRaysMaterial.uniforms.weight.value,
-			"exposure": pass.godRaysMaterial.uniforms.exposure.value,
-			"clampMax": pass.godRaysMaterial.uniforms.clampMax.value,
-			"samples": pass.samples,
-			"color": sun.material.color.getHex(),
-			"blend mode": "screen"
+			"resolution": effect.height,
+			"blurriness": effect.blurPass.kernelSize + 1,
+			"density": uniforms.density.value,
+			"decay": uniforms.decay.value,
+			"weight": uniforms.weight.value,
+			"exposure": uniforms.exposure.value,
+			"clampMax": uniforms.clampMax.value,
+			"samples": effect.samples,
+			"color": color.copyLinearToSRGB(sun.material.color).getHex(),
+			"opacity": blendMode.opacity.value,
+			"blend mode": blendMode.blendFunction
 		};
 
-		gui.add(params, "resolution").min(0.0).max(1.0).step(0.01).onChange(function() {
+		menu.add(params, "resolution", [240, 360, 480, 720, 1080]).onChange((value) => {
 
-			pass.resolutionScale = params.resolution;
-			composer.setSize();
-
-		});
-
-		gui.add(params, "blurriness").min(KernelSize.VERY_SMALL).max(KernelSize.HUGE).step(1).onChange(function() {
-
-			pass.kernelSize = params.blurriness;
+			effect.resolution.height = Number(value);
 
 		});
 
-		gui.add(params, "intensity").min(0.0).max(1.0).step(0.01).onChange(function() {
+		menu.add(pass, "dithering");
 
-			pass.intensity = params.intensity;
+		menu.add(params, "blurriness").min(KernelSize.VERY_SMALL).max(KernelSize.HUGE + 1).step(1).onChange((value) => {
 
-		});
-
-		gui.add(params, "density").min(0.0).max(1.0).step(0.01).onChange(function() {
-
-			pass.godRaysMaterial.uniforms.density.value = params.density;
+			effect.blur = (value > 0);
+			effect.blurPass.kernelSize = value - 1;
 
 		});
 
-		gui.add(params, "decay").min(0.0).max(1.0).step(0.01).onChange(function() {
+		menu.add(params, "density").min(0.0).max(1.0).step(0.01).onChange((value) => {
 
-			pass.godRaysMaterial.uniforms.decay.value = params.decay;
-
-		});
-
-		gui.add(params, "weight").min(0.0).max(1.0).step(0.01).onChange(function() {
-
-			pass.godRaysMaterial.uniforms.weight.value = params.weight;
+			uniforms.density.value = value;
 
 		});
 
-		gui.add(params, "exposure").min(0.0).max(1.0).step(0.01).onChange(function() {
+		menu.add(params, "decay").min(0.0).max(1.0).step(0.01).onChange((value) => {
 
-			pass.godRaysMaterial.uniforms.exposure.value = params.exposure;
-
-		});
-
-		gui.add(params, "clampMax").min(0.0).max(1.0).step(0.01).onChange(function() {
-
-			pass.godRaysMaterial.uniforms.clampMax.value = params.clampMax;
+			uniforms.decay.value = value;
 
 		});
 
-		gui.add(params, "samples").min(15).max(200).step(1).onChange(function() {
+		menu.add(params, "weight").min(0.0).max(1.0).step(0.01).onChange((value) => {
 
-			pass.samples = params.samples;
-
-		});
-
-		gui.addColor(params, "color").onChange(function() {
-
-			sun.material.color.setHex(params.color); directionalLight.color.setHex(params.color);
+			uniforms.weight.value = value;
 
 		});
 
-		gui.add(params, "blend mode", ["add", "screen"]).onChange(function() {
+		menu.add(params, "exposure").min(0.0).max(1.0).step(0.01).onChange((value) => {
 
-			pass.combineMaterial.setScreenModeEnabled(params["blend mode"] !== "add");
+			uniforms.exposure.value = value;
+
+		});
+
+		menu.add(params, "clampMax").min(0.0).max(1.0).step(0.01).onChange((value) => {
+
+			uniforms.clampMax.value = value;
+
+		});
+
+		menu.add(effect, "samples").min(15).max(200).step(1);
+
+		menu.addColor(params, "color").onChange((value) => {
+
+			sun.material.color.setHex(value).convertSRGBToLinear();
+			light.color.setHex(value).convertSRGBToLinear();
+
+		});
+
+		menu.add(params, "opacity").min(0.0).max(1.0).step(0.01).onChange((value) => {
+
+			blendMode.opacity.value = value;
+
+		});
+
+		menu.add(params, "blend mode", BlendFunction).onChange((value) => {
+
+			blendMode.setBlendFunction(Number(value));
 
 		});
 

@@ -1,33 +1,28 @@
+import { Color, PerspectiveCamera, TextureLoader, Vector3 } from "three";
+import { SpatialControls } from "spatial-controls";
+import { ProgressManager } from "../utils/ProgressManager";
+import { PostProcessingDemo } from "./PostProcessingDemo";
+
+import * as Sponza from "./objects/Sponza";
+
 import {
-	AmbientLight,
-	CubeTextureLoader,
-	DirectionalLight,
-	Mesh,
-	MeshPhongMaterial,
-	NearestFilter,
-	Object3D,
-	OrbitControls,
-	SphereBufferGeometry,
-	TextureLoader
-} from "three";
-
-import { GlitchMode, GlitchPass, RenderPass } from "../../../src";
-import { Demo } from "./Demo.js";
-
-/**
- * PI times two.
- *
- * @type {Number}
- * @private
- */
-
-const TWO_PI = 2.0 * Math.PI;
+	BlendFunction,
+	ChromaticAberrationEffect,
+	EdgeDetectionMode,
+	EffectPass,
+	GlitchMode,
+	GlitchEffect,
+	NoiseEffect,
+	SMAAEffect,
+	SMAAImageLoader,
+	SMAAPreset
+} from "../../../src";
 
 /**
  * A glitch demo setup.
  */
 
-export class GlitchDemo extends Demo {
+export class GlitchDemo extends PostProcessingDemo {
 
 	/**
 	 * Constructs a new glitch demo.
@@ -37,81 +32,73 @@ export class GlitchDemo extends Demo {
 
 	constructor(composer) {
 
-		super(composer);
+		super("glitch", composer);
 
 		/**
-		 * A glitch pass.
+		 * An effect.
 		 *
-		 * @type {GlitchPass}
+		 * @type {Effect}
 		 * @private
 		 */
 
-		this.glitchPass = null;
+		this.effect = null;
 
 		/**
-		 * An object.
+		 * A pass.
 		 *
-		 * @type {Object3D}
+		 * @type {Pass}
 		 * @private
 		 */
 
-		this.object = null;
+		this.pass = null;
 
 	}
 
 	/**
 	 * Loads scene assets.
 	 *
-	 * @param {Function} callback - A callback function.
+	 * @return {Promise} A promise that returns a collection of assets.
 	 */
 
-	load(callback) {
+	load() {
 
-		const assets = new Map();
+		const assets = this.assets;
 		const loadingManager = this.loadingManager;
 		const textureLoader = new TextureLoader(loadingManager);
-		const cubeTextureLoader = new CubeTextureLoader(loadingManager);
+		const smaaImageLoader = new SMAAImageLoader(loadingManager);
 
-		const path = "textures/skies/space4/";
-		const format = ".jpg";
-		const urls = [
-			path + "px" + format, path + "nx" + format,
-			path + "py" + format, path + "ny" + format,
-			path + "pz" + format, path + "nz" + format
-		];
+		const anisotropy = Math.min(this.composer.getRenderer().capabilities.getMaxAnisotropy(), 8);
 
-		if(this.assets === null) {
+		return new Promise((resolve, reject) => {
 
-			loadingManager.onProgress = (item, loaded, total) => {
+			if(assets.size === 0) {
 
-				if(loaded === total) {
+				loadingManager.onLoad = () => setTimeout(resolve, 250);
+				loadingManager.onProgress = ProgressManager.updateProgress;
+				loadingManager.onError = (url) => console.error(`Failed to load ${url}`);
 
-					this.assets = assets;
+				Sponza.load(assets, loadingManager, anisotropy);
 
-					callback();
+				textureLoader.load("textures/perturb.jpg", (t) => {
 
-				}
+					assets.set("perturbation-map", t);
 
-			};
+				});
 
-			cubeTextureLoader.load(urls, function(textureCube) {
+				smaaImageLoader.load(([search, area]) => {
 
-				assets.set("sky", textureCube);
+					assets.set("smaa-search", search);
+					assets.set("smaa-area", area);
 
-			});
+				});
 
-			textureLoader.load("textures/perturb.jpg", function(texture) {
+			} else {
 
-				texture.magFilter = texture.minFilter = NearestFilter;
-				assets.set("perturb-map", texture);
+				resolve();
 
-			});
+			}
 
-		} else {
-
-			callback();
-
-		}
+		});
 
 	}
 
@@ -119,143 +106,201 @@ export class GlitchDemo extends Demo {
 	 * Creates the scene.
 	 */
 
-	initialise() {
+	initialize() {
 
 		const scene = this.scene;
-		const camera = this.camera;
 		const assets = this.assets;
 		const composer = this.composer;
+		const renderer = composer.getRenderer();
 
-		// Controls.
+		// Epilepsy warning
 
-		this.controls = new OrbitControls(camera, composer.renderer.domElement);
+		if(sessionStorage.getItem("epilepsy-warning") === null) {
 
-		// Camera.
+			const div = document.createElement("div");
+			div.classList.add("warning");
+			const p = document.createElement("p");
+			p.innerText = "The following effect may trigger epileptic seizures or blackouts";
+			const a = document.createElement("a");
+			a.innerText = "Click here to continue";
+			a.href = "Click here to continue";
+			a.addEventListener("click", (event) => {
 
-		camera.position.set(6, 1, 6);
-		camera.lookAt(this.controls.target);
+				event.preventDefault();
+				sessionStorage.setItem("epilepsy-warning", "1");
+				div.remove();
 
-		// Sky.
-
-		scene.background = assets.get("sky");
-
-		// Lights.
-
-		const ambientLight = new AmbientLight(0x666666);
-		const directionalLight = new DirectionalLight(0xffbbaa);
-
-		directionalLight.position.set(-1, 1, 1);
-		directionalLight.target.position.copy(scene.position);
-
-		scene.add(directionalLight);
-		scene.add(ambientLight);
-
-		// Random objects.
-
-		const object = new Object3D();
-		const geometry = new SphereBufferGeometry(1, 4, 4);
-
-		let material, mesh;
-		let i;
-
-		for(i = 0; i < 100; ++i) {
-
-			material = new MeshPhongMaterial({
-				color: 0xffffff * Math.random(),
-				flatShading: true
 			});
 
-			mesh = new Mesh(geometry, material);
-			mesh.position.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-			mesh.position.multiplyScalar(Math.random() * 10);
-			mesh.rotation.set(Math.random() * 2, Math.random() * 2, Math.random() * 2);
-			mesh.scale.multiplyScalar(Math.random());
-			object.add(mesh);
+			div.append(p, a);
+			document.body.append(div);
 
 		}
 
-		this.object = object;
-		scene.add(object);
+		// Camera
 
-		// Passes.
+		const aspect = window.innerWidth / window.innerHeight;
+		const camera = new PerspectiveCamera(50, aspect, 0.5, 2000);
+		camera.position.set(-9, 0.5, 0);
+		this.camera = camera;
 
-		composer.addPass(new RenderPass(scene, camera));
+		// Controls
 
-		const pass = new GlitchPass({
-			perturbMap: assets.get("perturb-map")
+		const target = new Vector3(0, 3, -3.5);
+		const controls = new SpatialControls(camera.position, camera.quaternion, renderer.domElement);
+		controls.settings.pointer.lock = false;
+		controls.settings.translation.enabled = true;
+		controls.settings.sensitivity.rotation = 2.2;
+		controls.settings.sensitivity.translation = 3.0;
+		controls.lookAt(target);
+		controls.setOrbitEnabled(false);
+		this.controls = controls;
+
+		// Sky
+
+		scene.background = new Color(0xeeeeee);
+
+		// Lights
+
+		scene.add(...Sponza.createLights());
+
+		// Objects
+
+		scene.add(assets.get(Sponza.tag));
+
+		// Passes
+
+		const smaaEffect = new SMAAEffect(
+			assets.get("smaa-search"),
+			assets.get("smaa-area"),
+			SMAAPreset.HIGH,
+			EdgeDetectionMode.DEPTH
+		);
+
+		smaaEffect.edgeDetectionMaterial.setEdgeDetectionThreshold(0.01);
+
+		const chromaticAberrationEffect = new ChromaticAberrationEffect();
+
+		const glitchEffect = new GlitchEffect({
+			perturbationMap: assets.get("perturbation-map"),
+			chromaticAberrationOffset: chromaticAberrationEffect.offset
 		});
 
-		pass.renderToScreen = true;
-		this.glitchPass = pass;
-		composer.addPass(pass);
+		const noiseEffect = new NoiseEffect({
+			blendFunction: BlendFunction.COLOR_DODGE
+		});
 
-	}
+		noiseEffect.blendMode.opacity.value = 0.1;
 
-	/**
-	 * Updates this demo.
-	 *
-	 * @param {Number} delta - The time since the last frame in seconds.
-	 */
+		const smaaPass = new EffectPass(camera, smaaEffect);
+		const glitchPass = new EffectPass(camera, glitchEffect, noiseEffect);
+		const chromaticAberrationPass = new EffectPass(camera, chromaticAberrationEffect);
 
-	update(delta) {
+		this.effect = glitchEffect;
 
-		const object = this.object;
-
-		if(object !== null) {
-
-			object.rotation.x += 0.005;
-			object.rotation.y += 0.01;
-
-			// Prevent overflow.
-			if(object.rotation.x >= TWO_PI) {
-
-				object.rotation.x -= TWO_PI;
-
-			}
-
-			if(object.rotation.y >= TWO_PI) {
-
-				object.rotation.y -= TWO_PI;
-
-			}
-
-		}
+		composer.addPass(smaaPass);
+		composer.addPass(glitchPass);
+		composer.addPass(chromaticAberrationPass);
 
 	}
 
 	/**
 	 * Registers configuration options.
 	 *
-	 * @param {GUI} gui - A GUI.
+	 * @param {GUI} menu - A menu.
 	 */
 
-	configure(gui) {
+	registerOptions(menu) {
 
-		const pass = this.glitchPass;
-		const perturbMap = pass.perturbMap;
+		const effect = this.effect;
+		const perturbationMap = effect.getPerturbationMap();
+		const uniforms = effect.uniforms;
+		const delay = effect.delay;
+		const duration = effect.duration;
+		const strength = effect.strength;
 
 		const params = {
-			"mode": pass.mode,
-			"custom noise": true
+			"glitch mode": effect.mode,
+			"custom pattern": true,
+			"min delay": delay.x,
+			"max delay": delay.y,
+			"min duration": duration.x,
+			"max duration": duration.y,
+			"weak glitches": strength.x,
+			"strong glitches": strength.y,
+			"glitch ratio": effect.ratio,
+			"columns": uniforms.get("columns").value
 		};
 
-		gui.add(params, "mode").min(GlitchMode.SPORADIC).max(GlitchMode.CONSTANT_WILD).step(1).onChange(function() {
+		menu.add(params, "glitch mode", GlitchMode).onChange((value) => {
 
-			pass.mode = params.mode;
+			effect.mode = Number(value);
 
 		});
 
-		gui.add(params, "custom noise").onChange(function() {
+		menu.add(params, "custom pattern").onChange((value) => {
 
-			if(params["custom noise"]) {
+			if(value) {
 
-				pass.perturbMap = perturbMap;
+				effect.setPerturbationMap(perturbationMap);
 
 			} else {
 
-				pass.generatePerturbMap(64);
+				effect.setPerturbationMap(effect.generatePerturbationMap(64));
 
 			}
+
+		});
+
+		menu.add(params, "min delay").min(0.0).max(2.0).step(0.001).onChange((value) => {
+
+			delay.x = value;
+
+		});
+
+		menu.add(params, "max delay").min(2.0).max(4.0).step(0.001).onChange((value) => {
+
+			delay.y = value;
+
+		});
+
+		menu.add(params, "min duration").min(0.0).max(0.6).step(0.001).onChange((value) => {
+
+			duration.x = value;
+
+		});
+
+		menu.add(params, "max duration").min(0.6).max(1.8).step(0.001).onChange((value) => {
+
+			duration.y = value;
+
+		});
+
+		const folder = menu.addFolder("Strength");
+
+		folder.add(params, "weak glitches").min(0.0).max(1.0).step(0.001).onChange((value) => {
+
+			strength.x = value;
+
+		});
+
+		folder.add(params, "strong glitches").min(0.0).max(1.0).step(0.001).onChange((value) => {
+
+			strength.y = value;
+
+		});
+
+		folder.open();
+
+		menu.add(params, "glitch ratio").min(0.0).max(1.0).step(0.001).onChange((value) => {
+
+			effect.ratio = Number.parseFloat(value);
+
+		});
+
+		menu.add(params, "columns").min(0.0).max(0.5).step(0.001).onChange((value) => {
+
+			uniforms.get("columns").value = value;
 
 		});
 

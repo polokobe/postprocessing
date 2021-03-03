@@ -1,20 +1,11 @@
-"use strict";
+import test from "ava";
+import { SavePass } from "../../";
 
-const SavePass = require("../../build/postprocessing").SavePass;
+test("can be created and destroyed", t => {
 
-module.exports = {
+	const object = new SavePass();
+	object.dispose();
 
-	"Save": {
+	t.pass();
 
-		"can be created and destroyed": function(test) {
-
-			const pass = new SavePass();
-			test.ok(pass);
-			pass.dispose();
-			test.done();
-
-		}
-
-	}
-
-};
+});

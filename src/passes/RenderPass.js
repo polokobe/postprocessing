@@ -1,9 +1,11 @@
-import { ClearPass } from "./ClearPass.js";
-import { Pass } from "./Pass.js";
+import { OverrideMaterialManager } from "../core/OverrideMaterialManager";
+import { ClearPass } from "./ClearPass";
+import { Pass } from "./Pass";
 
 /**
- * A pass that renders a given scene directly on screen or into the read buffer
- * for further processing.
+ * A pass that renders a given scene into the input buffer or to screen.
+ *
+ * This pass uses a {@link ClearPass} to clear the target buffer.
  */
 
 export class RenderPass extends Pass {
@@ -13,62 +15,139 @@ export class RenderPass extends Pass {
 	 *
 	 * @param {Scene} scene - The scene to render.
 	 * @param {Camera} camera - The camera to use to render the scene.
-	 * @param {Object} [options] - Additional options.
-	 * @param {Material} [options.overrideMaterial=null] - An override material for the scene.
-	 * @param {Color} [options.clearColor=null] - An override clear color.
-	 * @param {Number} [options.clearAlpha=1.0] - An override clear alpha.
-	 * @param {Boolean} [options.clearDepth=false] - Whether depth should be cleared explicitly.
-	 * @param {Boolean} [options.clear=true] - Whether all buffers should be cleared.
+	 * @param {Material} [overrideMaterial=null] - An override material.
 	 */
 
-	constructor(scene, camera, options = {}) {
+	constructor(scene, camera, overrideMaterial = null) {
 
-		super(scene, camera, null);
+		super("RenderPass", scene, camera);
 
-		/**
-		 * The name of this pass.
-		 */
-
-		this.name = "RenderPass";
+		this.needsSwap = false;
 
 		/**
 		 * A clear pass.
 		 *
 		 * @type {ClearPass}
+		 * @private
 		 */
 
-		this.clearPass = new ClearPass(options);
+		this.clearPass = new ClearPass();
 
 		/**
-		 * An override material.
+		 * An override material manager.
 		 *
-		 * @type {Material}
-		 * @default null
+		 * @type {OverrideMaterialManager}
+		 * @private
 		 */
 
-		this.overrideMaterial = (options.overrideMaterial !== undefined) ? options.overrideMaterial : null;
+		this.overrideMaterialManager = (overrideMaterial === null) ? null :
+			new OverrideMaterialManager(overrideMaterial);
 
-		/**
-		 * Indicates whether the depth buffer should be cleared explicitly.
-		 *
-		 * @type {Boolean}
-		 * @default false
-		 */
+	}
 
-		this.clearDepth = (options.clearDepth !== undefined) ? options.clearDepth : false;
+	/**
+	 * Indicates whether this pass should render to screen.
+	 *
+	 * @type {Boolean}
+	 */
 
-		/**
-		 * Indicates whether the color, depth and stencil buffers should be cleared.
-		 *
-		 * Even with clear set to true you can prevent specific buffers from being
-		 * cleared by setting either the autoClearColor, autoClearStencil or
-		 * autoClearDepth properties of the renderer to false.
-		 *
-		 * @type {Boolean}
-		 * @default true
-		 */
+	get renderToScreen() {
 
-		this.clear = (options.clear !== undefined) ? options.clear : true;
+		return super.renderToScreen;
+
+	}
+
+	/**
+	 * Sets the render to screen flag.
+	 *
+	 * @type {Boolean}
+	 */
+
+	set renderToScreen(value) {
+
+		super.renderToScreen = value;
+		this.clearPass.renderToScreen = value;
+
+	}
+
+	/**
+	 * The current override material.
+	 *
+	 * @type {Material}
+	 */
+
+	get overrideMaterial() {
+
+		const manager = this.overrideMaterialManager;
+
+		return (manager !== null) ? manager.material : null;
+
+	}
+
+	/**
+	 * Sets the override material.
+	 *
+	 * @type {Material}
+	 */
+
+	set overrideMaterial(value) {
+
+		const manager = this.overrideMaterialManager;
+
+		if(value !== null) {
+
+			if(manager !== null) {
+
+				manager.setMaterial(value);
+
+			} else {
+
+				this.overrideMaterialManager = new OverrideMaterialManager(value);
+
+			}
+
+		} else if(manager !== null) {
+
+			manager.dispose();
+			this.overrideMaterialManager = null;
+
+		}
+
+	}
+
+	/**
+	 * Indicates whether the target buffer should be cleared before rendering.
+	 *
+	 * @type {Boolean}
+	 */
+
+	get clear() {
+
+		return this.clearPass.enabled;
+
+	}
+
+	/**
+	 * Enables or disables auto clear.
+	 *
+	 * @type {Boolean}
+	 */
+
+	set clear(value) {
+
+		this.clearPass.enabled = value;
+
+	}
+
+	/**
+	 * Returns the clear pass.
+	 *
+	 * @return {ClearPass} The clear pass.
+	 */
+
+	getClearPass() {
+
+		return this.clearPass;
 
 	}
 
@@ -76,28 +155,50 @@ export class RenderPass extends Pass {
 	 * Renders the scene.
 	 *
 	 * @param {WebGLRenderer} renderer - The renderer.
-	 * @param {WebGLRenderTarget} readBuffer - The read buffer.
+	 * @param {WebGLRenderTarget} inputBuffer - A frame buffer that contains the result of the previous pass.
+	 * @param {WebGLRenderTarget} outputBuffer - A frame buffer that serves as the output render target unless this pass renders to screen.
+	 * @param {Number} [deltaTime] - The time between the last frame and the current one in seconds.
+	 * @param {Boolean} [stencilTest] - Indicates whether a stencil mask is active.
 	 */
 
-	render(renderer, readBuffer) {
+	render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
 
 		const scene = this.scene;
-		const target = this.renderToScreen ? null : readBuffer;
+		const camera = this.camera;
+		const background = scene.background;
+		const renderTarget = this.renderToScreen ? null : inputBuffer;
 
 		if(this.clear) {
 
-			this.clearPass.render(renderer, target);
+			if(this.clearPass.overrideClearColor !== null) {
 
-		} else if(this.clearDepth) {
+				// This clear color is important! Ignore the scene background.
+				scene.background = null;
 
-			renderer.setRenderTarget(target);
-			renderer.clearDepth();
+			}
+
+			this.clearPass.render(renderer, inputBuffer);
 
 		}
 
-		scene.overrideMaterial = this.overrideMaterial;
-		renderer.render(scene, this.camera, target);
-		scene.overrideMaterial = null;
+		renderer.setRenderTarget(renderTarget);
+
+		if(this.overrideMaterialManager !== null) {
+
+			this.overrideMaterialManager.render(renderer, scene, camera);
+
+		} else {
+
+			renderer.render(scene, camera);
+
+		}
+
+		if(scene.background !== background) {
+
+			// Restore the background.
+			scene.background = background;
+
+		}
 
 	}
 

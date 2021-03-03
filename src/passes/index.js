@@ -1,26 +1,15 @@
-/**
- * A compilation of the post processing passes.
- *
- * @module postprocessing/passes
- */
-
-export { BloomPass } from "./BloomPass.js";
-export { BlurPass } from "./BlurPass.js";
-export { BokehPass } from "./BokehPass.js";
-export { Bokeh2Pass } from "./Bokeh2Pass.js";
-export { ClearMaskPass } from "./ClearMaskPass.js";
-export { ClearPass } from "./ClearPass.js";
-export { DotScreenPass } from "./DotScreenPass.js";
-export { FilmPass } from "./FilmPass.js";
-export { GlitchMode, GlitchPass } from "./GlitchPass.js";
-export { GodRaysPass } from "./GodRaysPass.js";
-export { MaskPass } from "./MaskPass.js";
-export { Pass } from "./Pass.js";
-export { PixelationPass } from "./PixelationPass.js";
-export { RenderPass } from "./RenderPass.js";
-export { SavePass } from "./SavePass.js";
-export { ShaderPass } from "./ShaderPass.js";
-export { ShockWavePass } from "./ShockWavePass.js";
-export { SMAAPass } from "./SMAAPass.js";
-export { TexturePass } from "./TexturePass.js";
-export { ToneMappingPass } from "./ToneMappingPass.js";
+export { AdaptiveLuminancePass } from "./AdaptiveLuminancePass";
+export { BlurPass } from "./BlurPass";
+export { ClearMaskPass } from "./ClearMaskPass";
+export { ClearPass } from "./ClearPass";
+export { DepthPass } from "./DepthPass";
+export { DepthDownsamplingPass } from "./DepthDownsamplingPass";
+export { EffectPass } from "./EffectPass";
+export { LambdaPass } from "./LambdaPass";
+export { LuminancePass } from "./LuminancePass";
+export { MaskPass } from "./MaskPass";
+export { NormalPass } from "./NormalPass";
+export { Pass } from "./Pass";
+export { RenderPass } from "./RenderPass";
+export { SavePass } from "./SavePass";
+export { ShaderPass } from "./ShaderPass";

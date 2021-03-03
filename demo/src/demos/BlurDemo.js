@@ -2,38 +2,33 @@ import {
 	AmbientLight,
 	CubeTextureLoader,
 	DirectionalLight,
-	Mesh,
-	MeshPhongMaterial,
-	Object3D,
-	OrbitControls,
-	SphereBufferGeometry
+	PerspectiveCamera,
+	sRGBEncoding
 } from "three";
+
+import { SpatialControls } from "spatial-controls";
+import { ProgressManager } from "../utils/ProgressManager";
+import { PostProcessingDemo } from "./PostProcessingDemo";
+
+import * as SphereCloud from "./objects/SphereCloud";
 
 import {
 	BlurPass,
-	CombineMaterial,
+	EdgeDetectionMode,
+	EffectPass,
 	KernelSize,
-	RenderPass,
 	SavePass,
-	ShaderPass
+	SMAAEffect,
+	SMAAPreset,
+	SMAAImageLoader,
+	TextureEffect
 } from "../../../src";
-
-import { Demo } from "./Demo.js";
-
-/**
- * PI times two.
- *
- * @type {Number}
- * @private
- */
-
-const TWO_PI = 2.0 * Math.PI;
 
 /**
  * A blur demo setup.
  */
 
-export class BlurDemo extends Demo {
+export class BlurDemo extends PostProcessingDemo {
 
 	/**
 	 * Constructs a new blur demo.
@@ -43,43 +38,34 @@ export class BlurDemo extends Demo {
 
 	constructor(composer) {
 
-		super(composer);
-
-		/**
-		 * A render pass.
-		 *
-		 * @type {RenderPass}
-		 * @private
-		 */
-
-		this.renderPass = null;
-
-		/**
-		 * A save pass.
-		 *
-		 * @type {SavePass}
-		 * @private
-		 */
-
-		this.savePass = null;
+		super("blur", composer);
 
 		/**
 		 * A blur pass.
 		 *
-		 * @type {BlurPass}
+		 * @type {Pass}
 		 * @private
 		 */
 
 		this.blurPass = null;
 
 		/**
-		 * A combine pass.
+		 * A texture pass.
 		 *
-		 * @type {ShaderPass}
+		 * @type {Pass}
 		 * @private
 		 */
 
-		this.combinePass = null;
+		this.texturePass = null;
+
+		/**
+		 * A texture effect.
+		 *
+		 * @type {Effect}
+		 * @private
+		 */
+
+		this.textureEffect = null;
 
 		/**
 		 * An object.
@@ -95,14 +81,15 @@ export class BlurDemo extends Demo {
 	/**
 	 * Loads scene assets.
 	 *
-	 * @param {Function} callback - A callback function.
+	 * @return {Promise} A promise that returns a collection of assets.
 	 */
 
-	load(callback) {
+	load() {
 
-		const assets = new Map();
+		const assets = this.assets;
 		const loadingManager = this.loadingManager;
 		const cubeTextureLoader = new CubeTextureLoader(loadingManager);
+		const smaaImageLoader = new SMAAImageLoader(loadingManager);
 
 		const path = "textures/skies/sunset/";
 		const format = ".png";
@@ -112,31 +99,35 @@ export class BlurDemo extends Demo {
 			path + "pz" + format, path + "nz" + format
 		];
 
-		if(this.assets === null) {
+		return new Promise((resolve, reject) => {
 
-			loadingManager.onProgress = (item, loaded, total) => {
+			if(assets.size === 0) {
 
-				if(loaded === total) {
+				loadingManager.onLoad = () => setTimeout(resolve, 250);
+				loadingManager.onProgress = ProgressManager.updateProgress;
+				loadingManager.onError = (url) => console.error(`Failed to load ${url}`);
 
-					this.assets = assets;
+				cubeTextureLoader.load(urls, (t) => {
 
-					callback();
+					t.encoding = sRGBEncoding;
+					assets.set("sky", t);
 
-				}
+				});
 
-			};
+				smaaImageLoader.load(([search, area]) => {
 
-			cubeTextureLoader.load(urls, function(textureCube) {
+					assets.set("smaa-search", search);
+					assets.set("smaa-area", area);
 
-				assets.set("sky", textureCube);
+				});
 
-			});
+			} else {
 
-		} else {
+				resolve();
 
-			callback();
+			}
 
-		}
+		});
 
 	}
 
@@ -144,116 +135,106 @@ export class BlurDemo extends Demo {
 	 * Creates the scene.
 	 */
 
-	initialise() {
+	initialize() {
 
 		const scene = this.scene;
-		const camera = this.camera;
 		const assets = this.assets;
 		const composer = this.composer;
+		const renderer = composer.getRenderer();
 
-		// Controls.
+		// Camera
 
-		this.controls = new OrbitControls(camera, composer.renderer.domElement);
-
-		// Camera.
-
+		const aspect = window.innerWidth / window.innerHeight;
+		const camera = new PerspectiveCamera(50, aspect, 1, 2000);
 		camera.position.set(-15, 0, -15);
-		camera.lookAt(this.controls.target);
+		camera.lookAt(scene.position);
+		this.camera = camera;
 
-		// Sky.
+		// Controls
+
+		const controls = new SpatialControls(camera.position, camera.quaternion, renderer.domElement);
+		controls.settings.pointer.lock = false;
+		controls.settings.translation.enabled = false;
+		controls.settings.sensitivity.rotation = 2.2;
+		controls.settings.sensitivity.zoom = 1.0;
+		controls.lookAt(scene.position);
+		this.controls = controls;
+
+		// Sky
 
 		scene.background = assets.get("sky");
 
-		// Lights.
+		// Lights
 
-		const ambientLight = new AmbientLight(0x666666);
-		const directionalLight = new DirectionalLight(0xffbbaa);
+		const ambientLight = new AmbientLight(0x323232);
+		const mainLight = new DirectionalLight(0xff7e66, 1.0);
+		mainLight.position.set(1.44, 0.2, 2.0);
 
-		directionalLight.position.set(1440, 200, 2000);
-		directionalLight.target.position.copy(scene.position);
-
-		scene.add(directionalLight);
 		scene.add(ambientLight);
+		scene.add(mainLight);
 
-		// Random objects.
+		// Objects
 
-		let object = new Object3D();
+		this.object = SphereCloud.create();
+		scene.add(this.object);
 
-		let geometry = new SphereBufferGeometry(1, 4, 4);
-		let material;
-		let i, mesh;
+		// Passes
 
-		for(i = 0; i < 100; ++i) {
+		const savePass = new SavePass();
+		const blurPass = new BlurPass({
+			height: 480
+		});
 
-			material = new MeshPhongMaterial({
-				color: 0xffffff * Math.random(),
-				flatShading: true
-			});
+		const smaaEffect = new SMAAEffect(
+			assets.get("smaa-search"),
+			assets.get("smaa-area"),
+			SMAAPreset.HIGH,
+			EdgeDetectionMode.LUMA
+		);
 
-			mesh = new Mesh(geometry, material);
-			mesh.position.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-			mesh.position.multiplyScalar(Math.random() * 10);
-			mesh.rotation.set(Math.random() * 2, Math.random() * 2, Math.random() * 2);
-			mesh.scale.multiplyScalar(Math.random());
-			object.add(mesh);
+		const textureEffect = new TextureEffect({
+			texture: savePass.renderTarget.texture
+		});
 
-		}
+		const smaaPass = new EffectPass(camera, smaaEffect);
+		const texturePass = new EffectPass(camera, textureEffect);
 
-		this.object = object;
+		textureEffect.blendMode.opacity.value = 0.0;
 
-		scene.add(object);
+		this.blurPass = blurPass;
+		this.texturePass = texturePass;
+		this.textureEffect = textureEffect;
 
-		// Passes.
-
-		let pass = new RenderPass(scene, camera);
-		this.renderPass = pass;
-		composer.addPass(pass);
-
-		pass = new SavePass();
-		this.savePass = pass;
-		composer.addPass(pass);
-
-		pass = new BlurPass();
-		this.blurPass = pass;
-		composer.addPass(pass);
-
-		pass = new ShaderPass(new CombineMaterial(), "texture1");
-		pass.material.uniforms.texture2.value = this.savePass.renderTarget.texture;
-		pass.material.uniforms.opacity1.value = 1.0;
-		pass.material.uniforms.opacity2.value = 0.0;
-		pass.renderToScreen = true;
-		this.combinePass = pass;
-		composer.addPass(pass);
+		composer.addPass(smaaPass);
+		composer.addPass(savePass);
+		composer.addPass(blurPass);
+		composer.addPass(texturePass);
 
 	}
 
 	/**
-	 * Updates this demo.
+	 * Update this demo.
 	 *
-	 * @param {Number} delta - The time since the last frame in seconds.
+	 * @param {Number} deltaTime - The time since the last frame in seconds.
 	 */
 
-	update(delta) {
+	update(deltaTime) {
 
 		const object = this.object;
+		const PI2 = 2.0 * Math.PI;
 
-		if(object !== null) {
+		object.rotation.x += 0.05 * deltaTime;
+		object.rotation.y += 0.25 * deltaTime;
 
-			object.rotation.x += 0.001;
-			object.rotation.y += 0.005;
+		if(object.rotation.x >= PI2) {
 
-			// Prevent overflow.
-			if(object.rotation.x >= TWO_PI) {
+			object.rotation.x -= PI2;
 
-				object.rotation.x -= TWO_PI;
+		}
 
-			}
+		if(object.rotation.y >= PI2) {
 
-			if(object.rotation.y >= TWO_PI) {
-
-				object.rotation.y -= TWO_PI;
-
-			}
+			object.rotation.y -= PI2;
 
 		}
 
@@ -262,47 +243,48 @@ export class BlurDemo extends Demo {
 	/**
 	 * Registers configuration options.
 	 *
-	 * @param {GUI} gui - A GUI.
+	 * @param {GUI} menu - A menu.
 	 */
 
-	configure(gui) {
+	registerOptions(menu) {
 
-		const composer = this.composer;
-		const renderPass = this.renderPass;
+		const textureEffect = this.textureEffect;
+		const texturePass = this.texturePass;
 		const blurPass = this.blurPass;
-		const combinePass = this.combinePass;
+		const blendMode = textureEffect.blendMode;
 
 		const params = {
-			"enabled": blurPass.enabled,
-			"resolution": blurPass.resolutionScale,
+			"resolution": blurPass.height,
 			"kernel size": blurPass.kernelSize,
-			"strength": combinePass.material.uniforms.opacity1.value
+			"scale": blurPass.scale,
+			"opacity": 1.0 - blendMode.opacity.value,
+			"blend mode": blendMode.blendFunction
 		};
 
-		gui.add(params, "resolution").min(0.0).max(1.0).step(0.01).onChange(function() {
+		menu.add(params, "resolution", [240, 360, 480, 720, 1080]).onChange((value) => {
 
-			blurPass.resolutionScale = params.resolution; composer.setSize();
-
-		});
-
-		gui.add(params, "kernel size").min(KernelSize.VERY_SMALL).max(KernelSize.HUGE).step(1).onChange(function() {
-
-			blurPass.kernelSize = params["kernel size"];
+			blurPass.resolution.height = Number(value);
 
 		});
 
-		gui.add(params, "strength").min(0.0).max(1.0).step(0.01).onChange(function() {
+		menu.add(params, "kernel size", KernelSize).onChange((value) => {
 
-			combinePass.material.uniforms.opacity1.value = params.strength;
-			combinePass.material.uniforms.opacity2.value = 1.0 - params.strength;
+			blurPass.kernelSize = Number(value);
 
 		});
 
-		gui.add(params, "enabled").onChange(function() {
+		menu.add(params, "scale").min(0.0).max(1.0).step(0.01).onChange((value) => {
 
-			renderPass.renderToScreen = !params.enabled;
-			blurPass.enabled = params.enabled;
-			combinePass.enabled = params.enabled;
+			blurPass.scale = Number(value);
+
+		});
+
+		menu.add(blurPass, "enabled");
+		menu.add(texturePass, "dithering");
+
+		menu.add(params, "opacity").min(0.0).max(1.0).step(0.01).onChange((value) => {
+
+			blendMode.opacity.value = 1.0 - value;
 
 		});
 

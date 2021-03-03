@@ -1,21 +1,11 @@
-"use strict";
+import test from "ava";
+import { EffectComposer } from "../../";
 
-const EffectComposer = require("../../build/postprocessing.js").EffectComposer;
+test("can be instantiated and disposed", t => {
 
-module.exports = {
+	const object = new EffectComposer();
+	object.dispose();
 
-	"Effect Composer": {
+	t.pass();
 
-		"can be instantiated and disposed": function(test) {
-
-			const composer = new EffectComposer();
-			test.ok(composer);
-			composer.dispose();
-
-			test.done();
-
-		}
-
-	}
-
-};
+});

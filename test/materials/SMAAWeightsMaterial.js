@@ -1,19 +1,8 @@
-"use strict";
+import test from "ava";
+import { SMAAWeightsMaterial } from "../../";
 
-const SMAAWeightsMaterial = require("../../build/postprocessing").SMAAWeightsMaterial;
+test("can be created", t => {
 
-module.exports = {
+	t.truthy(new SMAAWeightsMaterial());
 
-	"SMAAWeights": {
-
-		"can be created": function(test) {
-
-			const material = new SMAAWeightsMaterial();
-			test.ok(material);
-			test.done();
-
-		}
-
-	}
-
-};
+});

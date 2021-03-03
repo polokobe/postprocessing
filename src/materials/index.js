@@ -1,23 +1,17 @@
-/**
- * A collection of shader materials that are used in the post processing passes.
- *
- * @module postprocessing/materials
- */
-
-export { AdaptiveLuminosityMaterial } from "./AdaptiveLuminosityMaterial.js";
-export { BokehMaterial } from "./BokehMaterial.js";
-export { Bokeh2Material } from "./Bokeh2Material.js";
-export { CombineMaterial } from "./CombineMaterial.js";
-export { ConvolutionMaterial, KernelSize } from "./ConvolutionMaterial.js";
-export { CopyMaterial } from "./CopyMaterial.js";
-export { DotScreenMaterial } from "./DotScreenMaterial.js";
-export { FilmMaterial } from "./FilmMaterial.js";
-export { GlitchMaterial } from "./GlitchMaterial.js";
-export { GodRaysMaterial } from "./GodRaysMaterial.js";
-export { LuminosityMaterial } from "./LuminosityMaterial.js";
-export { PixelationMaterial } from "./PixelationMaterial.js";
-export { ShockWaveMaterial } from "./ShockWaveMaterial.js";
-export { SMAABlendMaterial } from "./SMAABlendMaterial.js";
-export { SMAAColorEdgesMaterial } from "./SMAAColorEdgesMaterial.js";
-export { SMAAWeightsMaterial } from "./SMAAWeightsMaterial.js";
-export { ToneMappingMaterial } from "./ToneMappingMaterial.js";
+export { AdaptiveLuminanceMaterial } from "./AdaptiveLuminanceMaterial";
+export { BokehMaterial } from "./BokehMaterial";
+export { CircleOfConfusionMaterial } from "./CircleOfConfusionMaterial";
+export { ColorEdgesMaterial } from "./ColorEdgesMaterial";
+export { ConvolutionMaterial, KernelSize } from "./ConvolutionMaterial";
+export { CopyMaterial } from "./CopyMaterial";
+export { DepthComparisonMaterial } from "./DepthComparisonMaterial";
+export { DepthDownsamplingMaterial } from "./DepthDownsamplingMaterial";
+export { DepthMaskMaterial } from "./DepthMaskMaterial";
+export { EdgeDetectionMaterial, EdgeDetectionMode, PredicationMode } from "./EdgeDetectionMaterial";
+export { EffectMaterial, Section } from "./EffectMaterial";
+export { GodRaysMaterial } from "./GodRaysMaterial";
+export { LuminanceMaterial } from "./LuminanceMaterial";
+export { MaskFunction, MaskMaterial } from "./MaskMaterial";
+export { OutlineMaterial, OutlineEdgesMaterial } from "./OutlineMaterial";
+export { SMAAWeightsMaterial } from "./SMAAWeightsMaterial";
+export { SSAOMaterial } from "./SSAOMaterial";
